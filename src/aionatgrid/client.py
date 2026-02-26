@@ -18,6 +18,7 @@ from .config import NationalGridConfig, RetryConfig
 from .exceptions import GraphQLError, RestAPIError, RetryExhaustedError
 from .extractors import (
     extract_ami_energy_usages,
+    extract_ami_energy_usages_15min,
     extract_billing_account,
     extract_energy_usage_costs,
     extract_energy_usages,
@@ -35,6 +36,7 @@ from .models import (
 )
 from .oidchelper import LoginData
 from .queries import (
+    ami_energy_usages_15min_request,
     ami_energy_usages_request,
     billing_account_info_request,
     energy_usage_costs_request,
@@ -692,6 +694,58 @@ class NationalGridClient:
         )
         response = await self.execute(request, headers=headers, timeout=timeout)
         return extract_ami_energy_usages(response)
+
+    async def get_ami_energy_usages_15min(
+        self,
+        meter_number: str,
+        premise_number: str | int,
+        service_point_number: str | int,
+        meter_point_number: str | int,
+        date_from: date | str,
+        date_to: date | str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> list[AmiEnergyUsage]:
+        """Get AMI 15-minute interval energy usage data with typed response.
+
+        This method uses the amiEnergyUsages15Min endpoint introduced by National
+        Grid in February 2026 for electric meter readings in some regions. Use this
+        instead of get_ami_energy_usages() if your region's electric meters have
+        migrated to the new 15-minute interval API.
+
+        Args:
+            meter_number: The meter number
+            premise_number: The premise number (auto-converts int to str)
+            service_point_number: The service point number (auto-converts int to str)
+            meter_point_number: The meter point number (auto-converts int to str)
+            date_from: Start date (date object or ISO string YYYY-MM-DD)
+            date_to: End date (date object or ISO string YYYY-MM-DD)
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            List of AMI energy usages (15-minute interval data)
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+            ValueError: When the response contains GraphQL errors
+        """
+        from_str = date_from.isoformat() if isinstance(date_from, date) else date_from
+        to_str = date_to.isoformat() if isinstance(date_to, date) else date_to
+        request = ami_energy_usages_15min_request(
+            variables={
+                "meterNumber": meter_number,
+                "premiseNumber": str(premise_number),
+                "servicePointNumber": str(service_point_number),
+                "meterPointNumber": str(meter_point_number),
+                "dateFrom": from_str,
+                "dateTo": to_str,
+            },
+        )
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_ami_energy_usages_15min(response)
 
     async def get_interval_reads(
         self,

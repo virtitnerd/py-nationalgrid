@@ -327,3 +327,87 @@ async def test_get_linked_accounts_returns_empty_list(
     accounts = await client.get_linked_accounts()
 
     assert accounts == []
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_15min_returns_typed_list(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_ami_energy_usages_15min returns a properly typed list."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "amiEnergyUsages15Min": {
+                    "nodes": [
+                        {"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 1.25},
+                        {"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 1.50},
+                    ]
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from="2024-03-01",
+        date_to="2024-03-01",
+    )
+
+    assert len(usages) == 2
+    assert usages[0]["fuelType"] == "ELECTRIC"
+    assert usages[0]["quantity"] == 1.25
+    assert usages[1]["quantity"] == 1.50
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_15min_passes_variables(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_ami_energy_usages_15min passes correct variables and uses 15min operation."""
+    mock_session.post.return_value = _DummyResponse(
+        {"data": {"amiEnergyUsages15Min": {"nodes": []}}}
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_ami_energy_usages_15min(
+        meter_number="M-123",
+        premise_number=456,
+        service_point_number=789,
+        meter_point_number=101,
+        date_from=date(2024, 3, 1),
+        date_to=date(2024, 3, 7),
+    )
+
+    _, kwargs = mock_session.post.call_args
+    payload = kwargs["json"]
+    assert payload["variables"]["meterNumber"] == "M-123"
+    assert payload["variables"]["premiseNumber"] == "456"
+    assert payload["variables"]["servicePointNumber"] == "789"
+    assert payload["variables"]["meterPointNumber"] == "101"
+    assert payload["variables"]["dateFrom"] == "2024-03-01"
+    assert payload["variables"]["dateTo"] == "2024-03-07"
+    assert payload["operationName"] == "NrtDailyUsage15Min"
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_15min_raises_data_extraction_error(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_ami_energy_usages_15min raises DataExtractionError when field is missing."""
+    mock_session.post.return_value = _DummyResponse({"data": {}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+
+    with pytest.raises(DataExtractionError, match="Missing 'amiEnergyUsages15Min' field"):
+        await client.get_ami_energy_usages_15min(
+            meter_number="M-001",
+            premise_number="PREM-001",
+            service_point_number="SP-001",
+            meter_point_number="MP-001",
+            date_from="2024-03-01",
+            date_to="2024-03-07",
+        )

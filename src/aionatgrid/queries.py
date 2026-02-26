@@ -241,13 +241,52 @@ def ami_energy_usages_request(
     ),
     operation_name: str = "NrtDailyUsage",
 ) -> GraphQLRequest:
-    """Build an AMI energy usages (hourly) query.
+    """Build an AMI energy usages daily query.
 
     This request targets the energyusage-cu-uwp-gql GraphQL endpoint.
     """
     return StandardQuery(
         operation_name=operation_name,
         root_field="amiEnergyUsages",
+        selection_set=selection_set,
+        variables=variables,
+        variable_definitions=variable_definitions,
+        field_arguments=field_arguments,
+        endpoint=ENERGY_USAGE_ENDPOINT,
+    ).to_request()
+
+
+def ami_energy_usages_15min_request(
+    *,
+    selection_set: str = AMI_ENERGY_USAGES_SELECTION_SET,
+    variables: Mapping[str, Any] | None = None,
+    variable_definitions: str | Sequence[str] | None = (
+        "$meterNumber: String!",
+        "$premiseNumber: String!",
+        "$servicePointNumber: String!",
+        "$meterPointNumber: String!",
+        "$dateFrom: Date!",
+        "$dateTo: Date!",
+    ),
+    field_arguments: str | None = (
+        "meterNumber: $meterNumber, "
+        "premiseNumber: $premiseNumber, "
+        "servicePointNumber: $servicePointNumber, "
+        "meterPointNumber: $meterPointNumber, "
+        "dateFrom: $dateFrom, "
+        "dateTo: $dateTo"
+    ),
+    operation_name: str = "NrtDailyUsage15Min",
+) -> GraphQLRequest:
+    """Build an AMI energy usages 15-minute interval query.
+
+    This request targets the energyusage-cu-uwp-gql GraphQL endpoint.
+    Use this for regions where electric meter AMI data is served via the
+    amiEnergyUsages15Min endpoint (as of Feb 23, 2026 for some regions).
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="amiEnergyUsages15Min",
         selection_set=selection_set,
         variables=variables,
         variable_definitions=variable_definitions,

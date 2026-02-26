@@ -1,4 +1,9 @@
-"""Example that fetches AMI hourly energy usage data."""
+"""Example that fetches AMI energy usage data.
+
+For electric meters in regions that have migrated to the new 15-minute interval
+API (as of Feb 23, 2026), this example uses get_ami_energy_usages_15min().
+For other meters (e.g. gas), get_ami_energy_usages() is used instead.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ from aionatgrid.helpers import create_cookie_jar
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fetch AMI hourly energy usage")
+    parser = argparse.ArgumentParser(description="Fetch AMI energy usage")
     parser.add_argument("--username", required=True, help="National Grid username")
     parser.add_argument("--password", required=True, help="National Grid password")
     parser.add_argument(
@@ -78,27 +83,43 @@ async def main() -> None:
                 print("AMI energy usage data may not be available.")
             print()
 
-            # Fetch AMI hourly energy usage for the requested date range
-            # AMI data has a 3-day delay, so end the range 3 days ago
+            # Fetch AMI energy usage for the requested date range
+            # AMI data has a delay, so end the range 3 days ago
             date_to = date.today() - timedelta(days=3)
             date_from = date_to - timedelta(days=args.days)
-            print(f"Fetching AMI hourly usage from {date_from} to {date_to}...")
+            fuel_type = meter.get("fuelType", "")
+            print(f"Fuel type: {fuel_type}")
+            print(f"Fetching AMI usage from {date_from} to {date_to}...")
             print()
 
-            usages = await client.get_ami_energy_usages(
-                meter_number=meter_number,
-                premise_number=premise_number,
-                service_point_number=service_point_number,
-                meter_point_number=meter_point_number,
-                date_from=date_from,
-                date_to=date_to,
-            )
+            # National Grid migrated electric meters in some regions to a new
+            # 15-minute interval API (amiEnergyUsages15Min) as of Feb 23, 2026.
+            # Use get_ami_energy_usages_15min() for ELECTRIC meters and
+            # get_ami_energy_usages() for other meter types (e.g. GAS).
+            if fuel_type.upper() == "ELECTRIC":
+                usages = await client.get_ami_energy_usages_15min(
+                    meter_number=meter_number,
+                    premise_number=premise_number,
+                    service_point_number=service_point_number,
+                    meter_point_number=meter_point_number,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+            else:
+                usages = await client.get_ami_energy_usages(
+                    meter_number=meter_number,
+                    premise_number=premise_number,
+                    service_point_number=service_point_number,
+                    meter_point_number=meter_point_number,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
 
             if not usages:
                 print("No AMI energy usage data returned.")
                 return
 
-            print(f"Received {len(usages)} daily usage records:")
+            print(f"Received {len(usages)} usage records:")
             pretty_print(usages)
 
 

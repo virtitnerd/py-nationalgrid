@@ -222,6 +222,47 @@ def extract_ami_energy_usages(response: GraphQLResponse) -> list[AmiEnergyUsage]
     return cast(list[AmiEnergyUsage], nodes)
 
 
+def extract_ami_energy_usages_15min(response: GraphQLResponse) -> list[AmiEnergyUsage]:
+    """Extract AMI 15-minute energy usages from a GraphQL response.
+
+    Args:
+        response: The GraphQL response from an AMI energy usages 15-minute query
+
+    Returns:
+        List of AMI energy usages
+
+    Raises:
+        ValueError: If the response contains GraphQL errors
+        DataExtractionError: If the expected data path is missing
+    """
+    response.raise_on_errors()
+
+    if response.data is None:
+        raise DataExtractionError(
+            "Response data is null",
+            path="data",
+            response_data=None,
+        )
+
+    ami_energy_usages = response.data.get("amiEnergyUsages15Min")
+    if ami_energy_usages is None:
+        raise DataExtractionError(
+            "Missing 'amiEnergyUsages15Min' field in response",
+            path="data.amiEnergyUsages15Min",
+            response_data=response.data,
+        )
+
+    nodes = ami_energy_usages.get("nodes")
+    if nodes is None:
+        raise DataExtractionError(
+            "Missing 'nodes' field in amiEnergyUsages15Min",
+            path="data.amiEnergyUsages15Min.nodes",
+            response_data=response.data,
+        )
+
+    return cast(list[AmiEnergyUsage], nodes)
+
+
 def extract_interval_reads(response: RestResponse) -> list[IntervalRead]:
     """Extract interval reads from a REST response.
 
