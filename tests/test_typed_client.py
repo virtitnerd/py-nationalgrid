@@ -11,6 +11,7 @@ import pytest
 from aionatgrid.client import NationalGridClient
 from aionatgrid.config import NationalGridConfig
 from aionatgrid.exceptions import DataExtractionError
+from aionatgrid.queries import ENERGY_USAGE_ENDPOINT
 
 
 class _DummyResponse:
@@ -382,7 +383,8 @@ async def test_get_ami_energy_usages_15min_passes_variables(
         date_to=date(2024, 3, 7),
     )
 
-    _, kwargs = mock_session.post.call_args
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == ENERGY_USAGE_ENDPOINT
     payload = kwargs["json"]
     assert payload["variables"]["meterNumber"] == "M-123"
     assert payload["variables"]["premiseNumber"] == "456"

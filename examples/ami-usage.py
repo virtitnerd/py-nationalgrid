@@ -75,11 +75,18 @@ async def main() -> None:
             fuel_type_filter = args.fuel_type.upper() if args.fuel_type else None
             if fuel_type_filter:
                 meter = next(
-                    (m for m in meters if m.get("fuelType", "").upper() == fuel_type_filter),
+                    (
+                        m
+                        for m in meters
+                        if isinstance(v := m.get("fuelType"), str) and v.upper() == fuel_type_filter
+                    ),
                     None,
                 )
                 if meter is None:
-                    available = [m.get("fuelType", "unknown") for m in meters]
+                    available = [
+                        v if isinstance(v := m.get("fuelType"), str) else "unknown"
+                        for m in meters
+                    ]
                     print(f"No meter found with fuel type '{args.fuel_type}'.")
                     print(f"Available fuel types: {', '.join(available)}")
                     return

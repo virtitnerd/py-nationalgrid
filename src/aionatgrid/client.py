@@ -222,9 +222,9 @@ class NationalGridClient:
                         # a freshly-obtained token because of a late-arriving 401 that
                         # was generated with the previous (now-stale) token.
                         if e.status == 401:
-                            logger.info("Received 401, clearing cached token")
                             async with self._auth_lock:
                                 if self._access_token == access_token:
+                                    logger.info("Received 401, clearing cached token")
                                     self._access_token = None
                                     self._token_expires_at = None
 
@@ -381,9 +381,9 @@ class NationalGridClient:
                         # a freshly-obtained token because of a late-arriving 401 that
                         # was generated with the previous (now-stale) token.
                         if e.status == 401:
-                            logger.info("Received 401, clearing cached token")
                             async with self._auth_lock:
                                 if self._access_token == access_token:
+                                    logger.info("Received 401, clearing cached token")
                                     self._access_token = None
                                     self._token_expires_at = None
 
