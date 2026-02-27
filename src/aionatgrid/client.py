@@ -216,11 +216,17 @@ class NationalGridClient:
                     try:
                         response.raise_for_status()
                     except aiohttp.ClientResponseError as e:
-                        # Special handling for 401: clear token and retry
+                        # Special handling for 401: only clear the cached token if it
+                        # is the same token that was sent in this request. A concurrent
+                        # coroutine may have already refreshed it, and we must not wipe
+                        # a freshly-obtained token because of a late-arriving 401 that
+                        # was generated with the previous (now-stale) token.
                         if e.status == 401:
                             logger.info("Received 401, clearing cached token")
-                            self._access_token = None
-                            self._token_expires_at = None
+                            async with self._auth_lock:
+                                if self._access_token == access_token:
+                                    self._access_token = None
+                                    self._token_expires_at = None
 
                         # Read response body for error context
                         try:
@@ -369,11 +375,17 @@ class NationalGridClient:
                     try:
                         response.raise_for_status()
                     except aiohttp.ClientResponseError as e:
-                        # Special handling for 401: clear token and retry
+                        # Special handling for 401: only clear the cached token if it
+                        # is the same token that was sent in this request. A concurrent
+                        # coroutine may have already refreshed it, and we must not wipe
+                        # a freshly-obtained token because of a late-arriving 401 that
+                        # was generated with the previous (now-stale) token.
                         if e.status == 401:
                             logger.info("Received 401, clearing cached token")
-                            self._access_token = None
-                            self._token_expires_at = None
+                            async with self._auth_lock:
+                                if self._access_token == access_token:
+                                    self._access_token = None
+                                    self._token_expires_at = None
 
                         # Read response body for error context
                         try:
