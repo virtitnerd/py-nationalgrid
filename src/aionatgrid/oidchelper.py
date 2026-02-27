@@ -361,7 +361,10 @@ def _extract_settings(auth_content: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             _LOGGER.exception("Failed to parse settings JSON from regex match")
 
-    _LOGGER.warning("Could not extract settings from authorization content")
+    _LOGGER.debug(
+        "Could not extract settings from authorization content; "
+        "will fall back to checking for a direct authorization code in the redirect URL"
+    )
     return None
 
 
