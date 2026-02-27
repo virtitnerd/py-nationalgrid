@@ -38,6 +38,7 @@ if __name__ == "__main__":
 | `get_energy_usage_costs()` | `list[EnergyUsageCost]` | Get energy costs for a billing period |
 | `get_energy_usages()` | `list[EnergyUsage]` | Get historical usage data |
 | `get_ami_energy_usages()` | `list[AmiEnergyUsage]` | Get AMI hourly energy usage |
+| `get_ami_energy_usages_15min()` | `list[AmiEnergyUsage]` | Get AMI 15-minute interval energy usage (electric meters) |
 | `get_interval_reads()` | `list[IntervalRead]` | Get real-time meter interval reads |
 
 All methods return typed results using TypedDict models.
