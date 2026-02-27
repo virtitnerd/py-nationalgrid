@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -101,8 +101,8 @@ async def main() -> None:
             print()
 
             # Fetch AMI energy usage for the requested date range
-            # AMI data has a delay, so end the range 3 days ago
-            date_to = date.today() - timedelta(days=3)
+            # API serves verified data through 00:00 UTC of the current UTC date
+            date_to = datetime.now(timezone.utc).date()
             date_from = date_to - timedelta(days=args.days)
             fuel_type = meter.get("fuelType", "")
             print(f"Fuel type: {fuel_type}")
