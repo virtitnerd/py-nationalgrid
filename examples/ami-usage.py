@@ -28,6 +28,11 @@ def parse_args() -> argparse.Namespace:
         default=7,
         help="Number of days to look back (default: 7)",
     )
+    parser.add_argument(
+        "--fuel-type",
+        default=None,
+        help="Filter meters by fuel type (e.g. ELECTRIC, GAS). Defaults to first meter found.",
+    )
     return parser.parse_args()
 
 
@@ -61,13 +66,25 @@ async def main() -> None:
             premise_number = billing_account["premiseNumber"]
             print(f"Premise number: {premise_number}")
 
-            # Get the first meter's details
+            # Get the desired meter's details
             meters = billing_account["meter"]["nodes"]
             if not meters:
                 print("No meters found for this account.")
                 return
 
-            meter = meters[0]
+            fuel_type_filter = args.fuel_type.upper() if args.fuel_type else None
+            if fuel_type_filter:
+                meter = next(
+                    (m for m in meters if m.get("fuelType", "").upper() == fuel_type_filter),
+                    None,
+                )
+                if meter is None:
+                    available = [m.get("fuelType", "unknown") for m in meters]
+                    print(f"No meter found with fuel type '{args.fuel_type}'.")
+                    print(f"Available fuel types: {', '.join(available)}")
+                    return
+            else:
+                meter = meters[0]
             meter_number = meter["meterNumber"]
             service_point_number = meter["servicePointNumber"]
             meter_point_number = meter["meterPointNumber"]
