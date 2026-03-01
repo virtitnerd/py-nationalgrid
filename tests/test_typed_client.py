@@ -370,13 +370,7 @@ async def test_get_ami_energy_usages_15min_passes_variables(
 ) -> None:
     """Verify get_ami_energy_usages_15min passes correct variables and uses 15min operation."""
     mock_session.post.return_value = _DummyResponse(
-        {
-            "data": {
-                "amiEnergyUsages15Min": {
-                    "nodes": [{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 1.0}]
-                }
-            }
-        }
+        {"data": {"amiEnergyUsages15Min": {"nodes": []}}}
     )
 
     client = NationalGridClient(config=config, session=mock_session)
@@ -399,43 +393,6 @@ async def test_get_ami_energy_usages_15min_passes_variables(
     assert payload["variables"]["dateFrom"] == "2024-03-01"
     assert payload["variables"]["dateTo"] == "2024-03-07"
     assert payload["operationName"] == "NrtDailyUsage15Min"
-
-
-@pytest.mark.asyncio
-async def test_get_ami_energy_usages_15min_falls_back_on_empty(
-    mock_session: MagicMock, config: NationalGridConfig
-) -> None:
-    """Verify get_ami_energy_usages_15min falls back to amiEnergyUsages when 15min returns empty."""
-    mock_session.post.side_effect = [
-        _DummyResponse({"data": {"amiEnergyUsages15Min": {"nodes": []}}}),
-        _DummyResponse(
-            {
-                "data": {
-                    "amiEnergyUsages": {
-                        "nodes": [{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.5}]
-                    }
-                }
-            }
-        ),
-    ]
-
-    client = NationalGridClient(config=config, session=mock_session)
-    usages = await client.get_ami_energy_usages_15min(
-        meter_number="M-001",
-        premise_number="PREM-001",
-        service_point_number="SP-001",
-        meter_point_number="MP-001",
-        date_from="2024-03-01",
-        date_to="2024-03-01",
-    )
-
-    assert mock_session.post.call_count == 2
-    first_payload = mock_session.post.call_args_list[0][1]["json"]
-    assert first_payload["operationName"] == "NrtDailyUsage15Min"
-    fallback_payload = mock_session.post.call_args_list[1][1]["json"]
-    assert fallback_payload["operationName"] == "NrtDailyUsage"
-    assert len(usages) == 1
-    assert usages[0]["quantity"] == 2.5
 
 
 @pytest.mark.asyncio

@@ -719,13 +719,17 @@ class NationalGridClient:
     ) -> list[AmiEnergyUsage]:
         """Get AMI 15-minute interval energy usage data with typed response.
 
-        Targets the ``amiEnergyUsages15Min`` endpoint introduced by National Grid
-        in February 2026 for electric meters in some regions. If that endpoint
-        returns an empty result, automatically falls back to the standard
-        ``amiEnergyUsages`` (``NrtDailyUsage``) endpoint.
+        Targets the ``amiEnergyUsages15Min`` (``NrtDailyUsage15Min``) endpoint
+        introduced by National Grid in February 2026 for electric meters.
 
-        Use ``get_ami_energy_usages()`` directly for GAS meters, which always use
-        the standard endpoint.
+        .. note::
+            As of early 2026 this endpoint caps responses at approximately
+            10,000 records regardless of the date range requested.
+            ``get_ami_energy_usages()`` (``NrtDailyUsage``) does not have this
+            cap and is recommended as the primary method for both ELECTRIC and
+            GAS meters until the limit is lifted.  This method is provided so
+            callers can opt in when the cap is acceptable or is removed in a
+            future API update.
 
         Args:
             meter_number: The meter number
@@ -738,8 +742,7 @@ class NationalGridClient:
             timeout: Request timeout in seconds
 
         Returns:
-            List of AMI energy usages (15-minute interval data, or daily data if
-            the 15-minute endpoint returned no results for this meter)
+            List of AMI energy usages (15-minute interval data)
 
         Raises:
             GraphQLError: When the GraphQL request fails
@@ -748,26 +751,20 @@ class NationalGridClient:
         """
         from_str = date_from.isoformat() if isinstance(date_from, date) else date_from
         to_str = date_to.isoformat() if isinstance(date_to, date) else date_to
-        variables = {
-            "meterNumber": meter_number,
-            "premiseNumber": str(premise_number),
-            "servicePointNumber": str(service_point_number),
-            "meterPointNumber": str(meter_point_number),
-            "dateFrom": from_str,
-            "dateTo": to_str,
-        }
         request = ami_energy_usages_request(
-            variables=variables,
+            variables={
+                "meterNumber": meter_number,
+                "premiseNumber": str(premise_number),
+                "servicePointNumber": str(service_point_number),
+                "meterPointNumber": str(meter_point_number),
+                "dateFrom": from_str,
+                "dateTo": to_str,
+            },
             root_field="amiEnergyUsages15Min",
             operation_name="NrtDailyUsage15Min",
         )
         response = await self.execute(request, headers=headers, timeout=timeout)
-        usages = extract_ami_energy_usages(response, root_field="amiEnergyUsages15Min")
-        if not usages:
-            request = ami_energy_usages_request(variables=variables)
-            response = await self.execute(request, headers=headers, timeout=timeout)
-            usages = extract_ami_energy_usages(response)
-        return usages
+        return extract_ami_energy_usages(response, root_field="amiEnergyUsages15Min")
 
     async def get_interval_reads(
         self,

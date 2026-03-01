@@ -1,11 +1,14 @@
 """Example that fetches AMI energy usage data.
 
-For electric meters, get_ami_energy_usages_15min() is used. It targets the
-15-minute interval API introduced by National Grid in February 2026 and
-automatically falls back to the standard daily endpoint if the 15-minute
-endpoint returns no data for this meter.
+get_ami_energy_usages() (NrtDailyUsage) is used for all meter types.  It
+supports unrestricted date ranges and is the recommended primary method for
+both ELECTRIC and GAS meters.
 
-For gas meters, get_ami_energy_usages() is used directly (always standard).
+get_ami_energy_usages_15min() (NrtDailyUsage15Min) is also available for
+callers that specifically want 15-minute interval data, but note that as of
+early 2026 that endpoint caps responses at ~10,000 records regardless of the
+requested date range.  Use it only when the cap is acceptable or has been
+removed in a future API update.
 """
 
 from __future__ import annotations
@@ -119,29 +122,18 @@ async def main() -> None:
             print(f"Fetching AMI usage from {date_from} to {date_to}...")
             print()
 
-            # ELECTRIC meters use the 15-minute interval API introduced in
-            # February 2026. get_ami_energy_usages_15min() automatically falls
-            # back to the standard daily endpoint if the 15-minute endpoint
-            # returns no data for this meter.
-            # GAS meters always use the standard daily endpoint.
-            if fuel_type.upper() == "ELECTRIC":
-                usages = await client.get_ami_energy_usages_15min(
-                    meter_number=meter_number,
-                    premise_number=premise_number,
-                    service_point_number=service_point_number,
-                    meter_point_number=meter_point_number,
-                    date_from=date_from,
-                    date_to=date_to,
-                )
-            else:
-                usages = await client.get_ami_energy_usages(
-                    meter_number=meter_number,
-                    premise_number=premise_number,
-                    service_point_number=service_point_number,
-                    meter_point_number=meter_point_number,
-                    date_from=date_from,
-                    date_to=date_to,
-                )
+            # Use the standard daily endpoint for all fuel types.  It supports
+            # unrestricted date ranges and works for both ELECTRIC and GAS.
+            # Switch to get_ami_energy_usages_15min() if you specifically need
+            # 15-minute interval data and can accept its current ~10k record cap.
+            usages = await client.get_ami_energy_usages(
+                meter_number=meter_number,
+                premise_number=premise_number,
+                service_point_number=service_point_number,
+                meter_point_number=meter_point_number,
+                date_from=date_from,
+                date_to=date_to,
+            )
 
             if not usages:
                 print("No AMI energy usage data returned.")
