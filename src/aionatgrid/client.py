@@ -18,7 +18,6 @@ from .config import NationalGridConfig, RetryConfig
 from .exceptions import GraphQLError, RestAPIError, RetryExhaustedError
 from .extractors import (
     extract_ami_energy_usages,
-    extract_ami_energy_usages_15min,
     extract_billing_account,
     extract_energy_usage_costs,
     extract_energy_usages,
@@ -757,7 +756,7 @@ class NationalGridClient:
             },
         )
         response = await self.execute(request, headers=headers, timeout=timeout)
-        return extract_ami_energy_usages_15min(response)
+        return extract_ami_energy_usages(response, root_field="amiEnergyUsages15Min")
 
     async def get_interval_reads(
         self,
