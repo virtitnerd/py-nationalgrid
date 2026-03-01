@@ -1,8 +1,11 @@
 """Example that fetches AMI energy usage data.
 
-For electric meters in regions that have migrated to the new 15-minute interval
-API (as of Feb 23, 2026), this example uses get_ami_energy_usages_15min().
-For other meters (e.g. gas), get_ami_energy_usages() is used instead.
+For electric meters, get_ami_energy_usages_15min() is used. It targets the
+15-minute interval API introduced by National Grid in February 2026 and
+automatically falls back to the standard daily endpoint if the 15-minute
+endpoint returns no data for this meter.
+
+For gas meters, get_ami_energy_usages() is used directly (always standard).
 """
 
 from __future__ import annotations
@@ -116,10 +119,11 @@ async def main() -> None:
             print(f"Fetching AMI usage from {date_from} to {date_to}...")
             print()
 
-            # National Grid migrated electric meters in some regions to a new
-            # 15-minute interval API (amiEnergyUsages15Min) as of Feb 23, 2026.
-            # Use get_ami_energy_usages_15min() for ELECTRIC meters and
-            # get_ami_energy_usages() for other meter types (e.g. GAS).
+            # ELECTRIC meters use the 15-minute interval API introduced in
+            # February 2026. get_ami_energy_usages_15min() automatically falls
+            # back to the standard daily endpoint if the 15-minute endpoint
+            # returns no data for this meter.
+            # GAS meters always use the standard daily endpoint.
             if fuel_type.upper() == "ELECTRIC":
                 usages = await client.get_ami_energy_usages_15min(
                     meter_number=meter_number,
