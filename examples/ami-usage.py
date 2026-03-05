@@ -116,7 +116,8 @@ async def main() -> None:
             # API serves verified data through 00:00 UTC of the current UTC date
             date_to = datetime.now(timezone.utc).date()
             date_from = date_to - timedelta(days=args.days)
-            fuel_type = meter.get("fuelType", "")
+            fuel_type = meter.get("fuelType")
+            fuel_type = fuel_type if isinstance(fuel_type, str) else ""
             print(f"Fuel type: {fuel_type}")
             print(f"Fetching AMI usage from {date_from} to {date_to}...")
             print()
