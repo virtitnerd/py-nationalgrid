@@ -1,14 +1,13 @@
 """Example that fetches AMI energy usage data.
 
-get_ami_energy_usages() (NrtDailyUsage) is used for all meter types.  It
-supports unrestricted date ranges and is the recommended primary method for
-both ELECTRIC and GAS meters.
+get_ami_energy_usages_15min() is used for all meter types (both ELECTRIC and
+GAS).  It targets the amiEnergyUsages15Min (NrtDailyUsage15Min) endpoint and
+automatically falls back to the standard amiEnergyUsages (NrtDailyUsage)
+endpoint when the API returns GraphQL errors for a given meter.
 
-get_ami_energy_usages_15min() (NrtDailyUsage15Min) is also available for
-callers that specifically want 15-minute interval data, but note that as of
-early 2026 that endpoint caps responses at ~10,000 records regardless of the
-requested date range.  Use it only when the cap is acceptable or has been
-removed in a future API update.
+Note: the 15-minute endpoint currently caps responses at ~10,000 records.
+For long historical ranges, either query in smaller date windows or call
+get_ami_energy_usages() directly to use the uncapped standard endpoint.
 """
 
 from __future__ import annotations
@@ -122,11 +121,11 @@ async def main() -> None:
             print(f"Fetching AMI usage from {date_from} to {date_to}...")
             print()
 
-            # Use the standard daily endpoint for all fuel types.  It supports
-            # unrestricted date ranges and works for both ELECTRIC and GAS.
-            # Switch to get_ami_energy_usages_15min() if you specifically need
-            # 15-minute interval data and can accept its current ~10k record cap.
-            usages = await client.get_ami_energy_usages(
+            # Primary endpoint for both ELECTRIC and GAS meters.  Falls back to
+            # amiEnergyUsages (NrtDailyUsage) automatically when the API returns
+            # GraphQL errors.  For date ranges that may exceed ~10k records, use
+            # get_ami_energy_usages() directly or query in smaller windows.
+            usages = await client.get_ami_energy_usages_15min(
                 meter_number=meter_number,
                 premise_number=premise_number,
                 service_point_number=service_point_number,

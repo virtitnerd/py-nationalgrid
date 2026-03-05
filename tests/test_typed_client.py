@@ -396,6 +396,55 @@ async def test_get_ami_energy_usages_15min_passes_variables(
 
 
 @pytest.mark.asyncio
+async def test_get_ami_energy_usages_15min_falls_back_on_graphql_errors(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_ami_energy_usages_15min falls back to amiEnergyUsages on GraphQL errors."""
+    mock_session.post.side_effect = [
+        _DummyResponse(
+            {
+                "errors": [
+                    {
+                        "message": "Unable to cast object of type 'System.DateTime'",
+                        "path": "amiEnergyUsages15Min",
+                        "extensions": {"code": "BadRequest"},
+                    }
+                ],
+                "data": {"amiEnergyUsages15Min": None},
+            }
+        ),
+        _DummyResponse(
+            {
+                "data": {
+                    "amiEnergyUsages": {
+                        "nodes": [{"date": "2024-03-01", "fuelType": "GAS", "quantity": 3.0}]
+                    }
+                }
+            }
+        ),
+    ]
+
+    client = NationalGridClient(config=config, session=mock_session)
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from="2024-03-01",
+        date_to="2024-03-01",
+    )
+
+    assert mock_session.post.call_count == 2
+    first_payload = mock_session.post.call_args_list[0][1]["json"]
+    assert first_payload["operationName"] == "NrtDailyUsage15Min"
+    fallback_payload = mock_session.post.call_args_list[1][1]["json"]
+    assert fallback_payload["operationName"] == "NrtDailyUsage"
+    assert len(usages) == 1
+    assert usages[0]["quantity"] == 3.0
+    assert usages[0]["fuelType"] == "GAS"
+
+
+@pytest.mark.asyncio
 async def test_get_ami_energy_usages_15min_raises_data_extraction_error(
     mock_session: MagicMock, config: NationalGridConfig
 ) -> None:

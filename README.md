@@ -37,8 +37,8 @@ if __name__ == "__main__":
 | `get_billing_account()` | `BillingAccount` | Get account details (region, meters, address) |
 | `get_energy_usage_costs()` | `list[EnergyUsageCost]` | Get energy costs for a billing period |
 | `get_energy_usages()` | `list[EnergyUsage]` | Get historical usage data |
-| `get_ami_energy_usages()` | `list[AmiEnergyUsage]` | Get AMI hourly energy usage |
-| `get_ami_energy_usages_15min()` | `list[AmiEnergyUsage]` | Get AMI 15-minute interval energy usage (electric meters) |
+| `get_ami_energy_usages()` | `list[AmiEnergyUsage]` | Get AMI daily energy usage (uncapped; fallback for `get_ami_energy_usages_15min()`) |
+| `get_ami_energy_usages_15min()` | `list[AmiEnergyUsage]` | Get AMI 15-minute interval energy usage (primary for ELECTRIC & GAS; auto-falls back to daily on API errors; ~10k record cap) |
 | `get_interval_reads()` | `list[IntervalRead]` | Get real-time meter interval reads |
 
 All methods return typed results using TypedDict models.
@@ -51,6 +51,8 @@ uv run python examples/account-info.py --username user@example.com --password se
 uv run python examples/energy-usage.py --username user@example.com --password secret
 uv run python examples/interval-reads.py --username user@example.com --password secret
 uv run python examples/ami-usage.py --username user@example.com --password secret
+uv run python examples/ami-usage.py --username user@example.com --password secret --fuel-type ELECTRIC
+uv run python examples/ami-usage.py --username user@example.com --password secret --fuel-type GAS --days 30
 ```
 
 ## Development

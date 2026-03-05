@@ -246,11 +246,12 @@ def ami_energy_usages_request(
 
     This request targets the energyusage-cu-uwp-gql GraphQL endpoint.
 
-    For electric meters in regions that use the 15-minute interval API
-    (as of Feb 23, 2026 for some regions), pass
-    ``root_field="amiEnergyUsages15Min"`` and
-    ``operation_name="NrtDailyUsage15Min"``.
-    Gas meters always use the defaults (``amiEnergyUsages`` / ``NrtDailyUsage``).
+    Defaults to the standard ``amiEnergyUsages`` / ``NrtDailyUsage`` operation.
+    Pass ``root_field="amiEnergyUsages15Min"`` and
+    ``operation_name="NrtDailyUsage15Min"`` for the 15-minute interval variant
+    (used as the primary path by ``get_ami_energy_usages_15min()`` for both
+    ELECTRIC and GAS meters, with automatic fallback to the defaults when the
+    15-minute endpoint returns GraphQL errors).
     """
     return StandardQuery(
         operation_name=operation_name,
