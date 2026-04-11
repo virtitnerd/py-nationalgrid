@@ -214,11 +214,17 @@ class NationalGridClient:
                     try:
                         response.raise_for_status()
                     except aiohttp.ClientResponseError as e:
-                        # Special handling for 401: clear token and retry
+                        # Special handling for 401: only clear the cached token if it
+                        # is the same token that was sent in this request. A concurrent
+                        # coroutine may have already refreshed it, and we must not wipe
+                        # a freshly-obtained token because of a late-arriving 401 that
+                        # was generated with the previous (now-stale) token.
                         if e.status == 401:
-                            logger.info("Received 401, clearing cached token")
-                            self._access_token = None
-                            self._token_expires_at = None
+                            async with self._auth_lock:
+                                if self._access_token == access_token:
+                                    logger.info("Received 401, clearing cached token")
+                                    self._access_token = None
+                                    self._token_expires_at = None
 
                         # Read response body for error context
                         try:
@@ -367,11 +373,17 @@ class NationalGridClient:
                     try:
                         response.raise_for_status()
                     except aiohttp.ClientResponseError as e:
-                        # Special handling for 401: clear token and retry
+                        # Special handling for 401: only clear the cached token if it
+                        # is the same token that was sent in this request. A concurrent
+                        # coroutine may have already refreshed it, and we must not wipe
+                        # a freshly-obtained token because of a late-arriving 401 that
+                        # was generated with the previous (now-stale) token.
                         if e.status == 401:
-                            logger.info("Received 401, clearing cached token")
-                            self._access_token = None
-                            self._token_expires_at = None
+                            async with self._auth_lock:
+                                if self._access_token == access_token:
+                                    logger.info("Received 401, clearing cached token")
+                                    self._access_token = None
+                                    self._token_expires_at = None
 
                         # Read response body for error context
                         try:
@@ -660,6 +672,12 @@ class NationalGridClient:
     ) -> list[AmiEnergyUsage]:
         """Get AMI hourly energy usage data with typed response.
 
+        This is the standard ``amiEnergyUsages`` (``NrtDailyUsage``) endpoint.
+        It supports unrestricted date ranges and is used automatically as a
+        fallback by ``get_ami_energy_usages_15min()`` when the 15-minute API
+        returns GraphQL errors for a given meter.  Call this method directly
+        when you want to bypass the 15-minute endpoint entirely.
+
         Args:
             meter_number: The meter number
             premise_number: The premise number (auto-converts int to str)
@@ -692,6 +710,76 @@ class NationalGridClient:
         )
         response = await self.execute(request, headers=headers, timeout=timeout)
         return extract_ami_energy_usages(response)
+
+    async def get_ami_energy_usages_15min(
+        self,
+        meter_number: str,
+        premise_number: str | int,
+        service_point_number: str | int,
+        meter_point_number: str | int,
+        date_from: date | str,
+        date_to: date | str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> list[AmiEnergyUsage]:
+        """Get AMI 15-minute interval energy usage data with typed response.
+
+        This is the primary AMI method for both ELECTRIC and GAS meters.
+        It targets ``amiEnergyUsages15Min`` (``NrtDailyUsage15Min``), introduced
+        by National Grid in February 2026, and automatically falls back to the
+        standard ``amiEnergyUsages`` (``NrtDailyUsage``) endpoint when the
+        15-minute API returns a GraphQL errors response for a given meter.
+
+        .. note::
+            The ``amiEnergyUsages15Min`` endpoint currently caps responses at
+            approximately 10,000 records regardless of the requested date range.
+            For historical queries spanning long periods (e.g. statistics,
+            dashboards), consider requesting smaller date windows and combining
+            the results, or call ``get_ami_energy_usages()`` directly to use the
+            uncapped standard endpoint.  Paging support may be added in a future
+            release.
+
+        Args:
+            meter_number: The meter number
+            premise_number: The premise number (auto-converts int to str)
+            service_point_number: The service point number (auto-converts int to str)
+            meter_point_number: The meter point number (auto-converts int to str)
+            date_from: Start date (date object or ISO string YYYY-MM-DD)
+            date_to: End date (date object or ISO string YYYY-MM-DD)
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            List of AMI energy usages (15-minute interval data, or daily data
+            if the 15-minute endpoint returned GraphQL errors for this meter)
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+            ValueError: When the response contains GraphQL errors
+        """
+        from_str = date_from.isoformat() if isinstance(date_from, date) else date_from
+        to_str = date_to.isoformat() if isinstance(date_to, date) else date_to
+        variables = {
+            "meterNumber": meter_number,
+            "premiseNumber": str(premise_number),
+            "servicePointNumber": str(service_point_number),
+            "meterPointNumber": str(meter_point_number),
+            "dateFrom": from_str,
+            "dateTo": to_str,
+        }
+        request = ami_energy_usages_request(
+            variables=variables,
+            root_field="amiEnergyUsages15Min",
+            operation_name="NrtDailyUsage15Min",
+        )
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        if response.has_errors:
+            request = ami_energy_usages_request(variables=variables)
+            response = await self.execute(request, headers=headers, timeout=timeout)
+            return extract_ami_energy_usages(response)
+        return extract_ami_energy_usages(response, root_field="amiEnergyUsages15Min")
 
     async def get_interval_reads(
         self,

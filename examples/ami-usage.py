@@ -1,11 +1,21 @@
-"""Example that fetches AMI hourly energy usage data."""
+"""Example that fetches AMI energy usage data.
+
+get_ami_energy_usages_15min() is used for all meter types (both ELECTRIC and
+GAS).  It targets the amiEnergyUsages15Min (NrtDailyUsage15Min) endpoint and
+automatically falls back to the standard amiEnergyUsages (NrtDailyUsage)
+endpoint when the API returns GraphQL errors for a given meter.
+
+Note: the 15-minute endpoint currently caps responses at ~10,000 records.
+For long historical ranges, either query in smaller date windows or call
+get_ami_energy_usages() directly to use the uncapped standard endpoint.
+"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -14,7 +24,7 @@ from aionatgrid.helpers import create_cookie_jar
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fetch AMI hourly energy usage")
+    parser = argparse.ArgumentParser(description="Fetch AMI energy usage")
     parser.add_argument("--username", required=True, help="National Grid username")
     parser.add_argument("--password", required=True, help="National Grid password")
     parser.add_argument(
@@ -22,6 +32,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=7,
         help="Number of days to look back (default: 7)",
+    )
+    parser.add_argument(
+        "--fuel-type",
+        default=None,
+        help="Filter meters by fuel type (e.g. ELECTRIC, GAS). Defaults to first meter found.",
     )
     return parser.parse_args()
 
@@ -56,13 +71,32 @@ async def main() -> None:
             premise_number = billing_account["premiseNumber"]
             print(f"Premise number: {premise_number}")
 
-            # Get the first meter's details
+            # Get the desired meter's details
             meters = billing_account["meter"]["nodes"]
             if not meters:
                 print("No meters found for this account.")
                 return
 
-            meter = meters[0]
+            fuel_type_filter = args.fuel_type.upper() if args.fuel_type else None
+            if fuel_type_filter:
+                meter = next(
+                    (
+                        m
+                        for m in meters
+                        if isinstance(v := m.get("fuelType"), str) and v.upper() == fuel_type_filter
+                    ),
+                    None,
+                )
+                if meter is None:
+                    available = [
+                        v if isinstance(v := m.get("fuelType"), str) else "unknown"
+                        for m in meters
+                    ]
+                    print(f"No meter found with fuel type '{args.fuel_type}'.")
+                    print(f"Available fuel types: {', '.join(available)}")
+                    return
+            else:
+                meter = meters[0]
             meter_number = meter["meterNumber"]
             service_point_number = meter["servicePointNumber"]
             meter_point_number = meter["meterPointNumber"]
@@ -78,14 +112,21 @@ async def main() -> None:
                 print("AMI energy usage data may not be available.")
             print()
 
-            # Fetch AMI hourly energy usage for the requested date range
-            # AMI data has a 3-day delay, so end the range 3 days ago
-            date_to = date.today() - timedelta(days=3)
+            # Fetch AMI energy usage for the requested date range
+            # API serves verified data through 00:00 UTC of the current UTC date
+            date_to = datetime.now(timezone.utc).date()
             date_from = date_to - timedelta(days=args.days)
-            print(f"Fetching AMI hourly usage from {date_from} to {date_to}...")
+            fuel_type = meter.get("fuelType")
+            fuel_type = fuel_type if isinstance(fuel_type, str) else ""
+            print(f"Fuel type: {fuel_type}")
+            print(f"Fetching AMI usage from {date_from} to {date_to}...")
             print()
 
-            usages = await client.get_ami_energy_usages(
+            # Primary endpoint for both ELECTRIC and GAS meters.  Falls back to
+            # amiEnergyUsages (NrtDailyUsage) automatically when the API returns
+            # GraphQL errors.  For date ranges that may exceed ~10k records, use
+            # get_ami_energy_usages() directly or query in smaller windows.
+            usages = await client.get_ami_energy_usages_15min(
                 meter_number=meter_number,
                 premise_number=premise_number,
                 service_point_number=service_point_number,
@@ -98,7 +139,7 @@ async def main() -> None:
                 print("No AMI energy usage data returned.")
                 return
 
-            print(f"Received {len(usages)} daily usage records:")
+            print(f"Received {len(usages)} usage records:")
             pretty_print(usages)
 
 

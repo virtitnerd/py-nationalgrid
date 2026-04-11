@@ -135,6 +135,14 @@ async def async_auth_oidc(
             _LOGGER.debug("Successfully obtained access token")
             # Default to 3600 seconds (1 hour) if not provided
             expires_in = tokens.get("expires_in", 3600)
+            # Guard against server returning nonsensical values (zero, negative,
+            # or an impossibly large lifetime that would prevent refresh).
+            if not isinstance(expires_in, int) or not (60 <= expires_in <= 86400):
+                _LOGGER.warning(
+                    "Unexpected expires_in value %r from token endpoint, defaulting to 3600",
+                    expires_in,
+                )
+                expires_in = 3600
             access_token = tokens["access_token"]
 
             # Extract sub claim from access token if login_data provided
@@ -353,7 +361,10 @@ def _extract_settings(auth_content: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             _LOGGER.exception("Failed to parse settings JSON from regex match")
 
-    _LOGGER.warning("Could not extract settings from authorization content")
+    _LOGGER.debug(
+        "Could not extract settings from authorization content; "
+        "will fall back to checking for a direct authorization code in the redirect URL"
+    )
     return None
 
 
@@ -506,7 +517,18 @@ async def _confirm_signin(
 def _extract_auth_result(
     final_url: str | None, redirect_uri: str, config: ConfigDict, client_id: str
 ) -> tuple[str | None, str | None]:
-    if not final_url or not final_url.startswith(redirect_uri):
+    if not final_url:
+        return None, None
+    # Compare scheme, host, and path exactly rather than using startswith, which
+    # would incorrectly accept URLs like "…/auth-landing-other" when the expected
+    # redirect_uri ends in "…/auth-landing".
+    expected = urlparse(redirect_uri)
+    actual = urlparse(final_url)
+    if not (
+        actual.scheme == expected.scheme
+        and actual.netloc == expected.netloc
+        and actual.path == expected.path
+    ):
         return None, None
     parsed_params = _parse_redirect_params(final_url)
     auth_code = parsed_params.get("code", [None])[0]

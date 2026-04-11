@@ -240,14 +240,22 @@ def ami_energy_usages_request(
         "dateTo: $dateTo"
     ),
     operation_name: str = "NrtDailyUsage",
+    root_field: str = "amiEnergyUsages",
 ) -> GraphQLRequest:
-    """Build an AMI energy usages (hourly) query.
+    """Build an AMI energy usages query.
 
     This request targets the energyusage-cu-uwp-gql GraphQL endpoint.
+
+    Defaults to the standard ``amiEnergyUsages`` / ``NrtDailyUsage`` operation.
+    Pass ``root_field="amiEnergyUsages15Min"`` and
+    ``operation_name="NrtDailyUsage15Min"`` for the 15-minute interval variant
+    (used as the primary path by ``get_ami_energy_usages_15min()`` for both
+    ELECTRIC and GAS meters, with automatic fallback to the defaults when the
+    15-minute endpoint returns GraphQL errors).
     """
     return StandardQuery(
         operation_name=operation_name,
-        root_field="amiEnergyUsages",
+        root_field=root_field,
         selection_set=selection_set,
         variables=variables,
         variable_definitions=variable_definitions,
