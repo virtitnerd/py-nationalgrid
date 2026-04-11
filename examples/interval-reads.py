@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 
 import aiohttp
 
-from aionatgrid import NationalGridClient, NationalGridConfig
-from aionatgrid.helpers import create_cookie_jar
+from py_nationalgrid import NationalGridClient, NationalGridConfig
+from py_nationalgrid.helpers import create_cookie_jar
 
 
 def parse_args() -> argparse.Namespace:

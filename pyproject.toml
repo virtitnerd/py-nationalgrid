@@ -3,14 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aionatgrid"
+name = "py-nationalgrid"
 version = "0.4.0"
 description = "Async Python client for National Grid built on aiohttp"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [
-    { name = "Ryan Morash", email = "ryan@morash.me"}
+    { name = "Colin Haven", email = "colin@chmail.me"}
     ]
 keywords = ["national-grid", "graphql", "aiohttp", "asyncio"]
 classifiers = [
@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.urls]
-repository = "https://github.com/ryanmorash/aionatgrid"
+repository = "https://github.com/virtitnerd/py-nationalgrid"
 
 [dependency-groups]
 dev = [
@@ -39,10 +39,6 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.1.13",
     "mypy>=1.7",
-]
-docs = [
-    "sphinx>=7.2",
-    "sphinx-rtd-theme>=1.2",
 ]
 
 [tool.setuptools]

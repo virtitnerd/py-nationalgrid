@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from aionatgrid.exceptions import DataExtractionError
-from aionatgrid.extractors import (
+from py_nationalgrid.exceptions import DataExtractionError
+from py_nationalgrid.extractors import (
     extract_billing_account,
     extract_energy_usage_costs,
     extract_energy_usages,
     extract_linked_accounts,
 )
-from aionatgrid.graphql import GraphQLResponse
+from py_nationalgrid.graphql import GraphQLResponse
 
 
 class TestExtractLinkedAccounts:

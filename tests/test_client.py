@@ -6,10 +6,10 @@ from unittest.mock import MagicMock
 import aiohttp
 import pytest
 
-from aionatgrid.client import NationalGridClient
-from aionatgrid.config import NationalGridConfig
-from aionatgrid.graphql import GraphQLRequest
-from aionatgrid.oidchelper import LoginData
+from py_nationalgrid.client import NationalGridClient
+from py_nationalgrid.config import NationalGridConfig
+from py_nationalgrid.graphql import GraphQLRequest
+from py_nationalgrid.oidchelper import LoginData
 
 
 class _DummyResponse:
@@ -112,7 +112,7 @@ async def test_execute_merges_headers(monkeypatch: pytest.MonkeyPatch) -> None:
         assert password == "super-secret"
         return "token", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     client = NationalGridClient(config=config, session=session)
 
@@ -152,7 +152,7 @@ async def test_request_rest_uses_base_url(monkeypatch: pytest.MonkeyPatch) -> No
     ) -> tuple[str, int]:
         return "rest-token", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     client = NationalGridClient(config=config, session=session)
 
@@ -190,7 +190,7 @@ async def test_execute_uses_oidc_token(monkeypatch: pytest.MonkeyPatch) -> None:
         assert password == "super-secret"
         return "oidc-token", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     client = NationalGridClient(config=config, session=session)
 
@@ -215,7 +215,7 @@ async def test_session_uses_configured_connector(monkeypatch: pytest.MonkeyPatch
     ) -> tuple[str, int]:
         return "test-token", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     config = NationalGridConfig(
         username="user@example.com",
@@ -280,7 +280,7 @@ async def test_graphql_errors_logged_safely(caplog: pytest.LogCaptureFixture) ->
     client = NationalGridClient(config=config, session=session)
     request = GraphQLRequest(query="query Test { value }")
 
-    with caplog.at_level(logging.WARNING, logger="aionatgrid.client"):
+    with caplog.at_level(logging.WARNING, logger="py_nationalgrid.client"):
         response = await client.execute(request)
 
     # Verify response has errors

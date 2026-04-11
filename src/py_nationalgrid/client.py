@@ -7,7 +7,7 @@ import logging
 import random
 import time
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import urljoin
 
@@ -48,6 +48,25 @@ logger = logging.getLogger(__name__)
 
 # Buffer time before actual expiration to refresh token (5 minutes)
 TOKEN_EXPIRY_BUFFER_SECONDS = 300
+
+# amiEnergyUsages15Min caps responses at ~10 000 records regardless of date range,
+# but the Azure Application Gateway returns 504 Gateway Timeout before that cap is
+# reached for windows larger than ~45 days on both ELECTRIC and GAS meters.
+# ELECTRIC: 96 records/day × 45 days = 4 320 records — empirically safe.
+# GAS: 24 records/day × 45 days = 1 080 records — empirically safe.
+AMI_CHUNK_DAYS_ELECTRIC = 45
+AMI_CHUNK_DAYS_GAS = 45
+# Conservative default used when fuel type is unknown.
+AMI_CHUNK_DAYS_DEFAULT = 45
+
+
+def _is_gateway_timeout(exc: Exception) -> bool:
+    """Return True when exc represents a 504 Gateway Timeout from the API."""
+    if isinstance(exc, RetryExhaustedError):
+        return isinstance(exc.last_error, GraphQLError) and exc.last_error.status == 504
+    if isinstance(exc, GraphQLError):
+        return exc.status == 504
+    return False
 
 
 class NationalGridClient:
@@ -124,6 +143,11 @@ class NationalGridClient:
         """
         # Check if we've exhausted attempts
         if attempt >= retry_config.max_attempts - 1:
+            return False
+
+        # GraphQL 504s signal cold-storage boundary — deterministic, never transient.
+        # Retrying will always produce another 504; skip remaining attempts immediately.
+        if isinstance(error, GraphQLError) and error.status == 504:
             return False
 
         # Extract original error from wrapped exceptions
@@ -720,6 +744,7 @@ class NationalGridClient:
         date_from: date | str,
         date_to: date | str,
         *,
+        fuel_type: str | None = None,
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
     ) -> list[AmiEnergyUsage]:
@@ -731,14 +756,17 @@ class NationalGridClient:
         standard ``amiEnergyUsages`` (``NrtDailyUsage``) endpoint when the
         15-minute API returns a GraphQL errors response for a given meter.
 
-        .. note::
-            The ``amiEnergyUsages15Min`` endpoint currently caps responses at
-            approximately 10,000 records regardless of the requested date range.
-            For historical queries spanning long periods (e.g. statistics,
-            dashboards), consider requesting smaller date windows and combining
-            the results, or call ``get_ami_energy_usages()`` directly to use the
-            uncapped standard endpoint.  Paging support may be added in a future
-            release.
+        When the requested date range exceeds the safe window for the meter's
+        fuel type, the query is automatically split into chunks and the results
+        concatenated:
+
+        - ``"ELECTRIC"``: 45-day chunks (empirically safe; >45 days risks a 504)
+        - ``"GAS"`` or unknown: 45-day chunks (empirically safe below the server-side
+          504 threshold observed around 50 days)
+
+        If ``fuel_type`` is ``None`` the conservative 45-day window is used.
+        When the date range fits within a single chunk, no splitting occurs and
+        the request is identical to the pre-chunking behaviour.
 
         Args:
             meter_number: The meter number
@@ -747,6 +775,8 @@ class NationalGridClient:
             meter_point_number: The meter point number (auto-converts int to str)
             date_from: Start date (date object or ISO string YYYY-MM-DD)
             date_to: End date (date object or ISO string YYYY-MM-DD)
+            fuel_type: Meter fuel type (``"ELECTRIC"`` or ``"GAS"``).  Controls
+                the chunk window size.  Pass ``None`` to use the conservative default.
             headers: Additional headers to include
             timeout: Request timeout in seconds
 
@@ -758,28 +788,140 @@ class NationalGridClient:
             GraphQLError: When the GraphQL request fails
             DataExtractionError: When the expected data path is missing
             ValueError: When the response contains GraphQL errors
+
+        Note:
+            504 Gateway Timeout responses are not raised. When a chunk hits cold
+            storage (data older than ~45 days from today), the method logs a warning
+            and returns whatever records were collected from more-recent chunks.
+            Callers should not assume the returned list covers the full requested
+            date range.
         """
-        from_str = date_from.isoformat() if isinstance(date_from, date) else date_from
-        to_str = date_to.isoformat() if isinstance(date_to, date) else date_to
-        variables = {
+        # Normalise dates to date objects so arithmetic is straightforward.
+        d_from = date.fromisoformat(date_from) if isinstance(date_from, str) else date_from
+        d_to = date.fromisoformat(date_to) if isinstance(date_to, str) else date_to
+
+        chunk_days = (
+            AMI_CHUNK_DAYS_ELECTRIC
+            if (fuel_type or "").upper() == "ELECTRIC"
+            else AMI_CHUNK_DAYS_GAS
+        )
+
+        # Build the list of (chunk_start, chunk_end) windows, then reverse so
+        # we iterate newest-first. This guarantees that recent data (within the
+        # API's hot storage window) is always fetched before older chunks that
+        # may hit the ~45-day cold storage boundary and return a 504.
+        windows: list[tuple[date, date]] = []
+        chunk_start = d_from
+        while chunk_start <= d_to:
+            chunk_end = min(chunk_start + timedelta(days=chunk_days - 1), d_to)
+            windows.append((chunk_start, chunk_end))
+            chunk_start = chunk_end + timedelta(days=1)
+        windows.reverse()
+
+        base_vars = {
             "meterNumber": meter_number,
             "premiseNumber": str(premise_number),
             "servicePointNumber": str(service_point_number),
             "meterPointNumber": str(meter_point_number),
-            "dateFrom": from_str,
-            "dateTo": to_str,
         }
-        request = ami_energy_usages_request(
-            variables=variables,
-            root_field="amiEnergyUsages15Min",
-            operation_name="NrtDailyUsage15Min",
-        )
-        response = await self.execute(request, headers=headers, timeout=timeout)
-        if response.has_errors:
-            request = ami_energy_usages_request(variables=variables)
-            response = await self.execute(request, headers=headers, timeout=timeout)
-            return extract_ami_energy_usages(response)
-        return extract_ami_energy_usages(response, root_field="amiEnergyUsages15Min")
+
+        chunk_results: list[list[AmiEnergyUsage]] = []
+        fell_back = False  # True after the first chunk triggers the daily fallback
+
+        for i, (w_from, w_to) in enumerate(windows):
+            variables = {
+                **base_vars,
+                "dateFrom": w_from.isoformat(),
+                "dateTo": w_to.isoformat(),
+            }
+
+            if fell_back:
+                # Meter doesn't support 15min — stay on daily for remaining chunks.
+                request = ami_energy_usages_request(variables=variables)
+                try:
+                    response = await self.execute(request, headers=headers, timeout=timeout)
+                except (RetryExhaustedError, GraphQLError) as e:
+                    if _is_gateway_timeout(e):
+                        logger.warning(
+                            "amiEnergyUsages fallback: 504 on chunk %d/%d (%s to %s) — "
+                            "data is likely beyond the ~45-day accessible window. "
+                            "Returning %d record(s) collected so far.",
+                            i + 1, len(windows), w_from, w_to,
+                            sum(len(c) for c in chunk_results),
+                        )
+                        break
+                    raise
+                chunk_results.append(extract_ami_energy_usages(response))
+                continue
+
+            request = ami_energy_usages_request(
+                variables=variables,
+                root_field="amiEnergyUsages15Min",
+                operation_name="NrtDailyUsage15Min",
+            )
+            try:
+                response = await self.execute(request, headers=headers, timeout=timeout)
+            except (RetryExhaustedError, GraphQLError) as e:
+                if _is_gateway_timeout(e):
+                    logger.warning(
+                        "amiEnergyUsages15Min: 504 on chunk %d/%d (%s to %s) — "
+                        "data is likely beyond the ~45-day accessible window. "
+                        "Returning %d record(s) collected so far.",
+                        i + 1, len(windows), w_from, w_to,
+                        sum(len(c) for c in chunk_results),
+                    )
+                    break
+                raise
+
+            if response.has_errors:
+                if i == 0:
+                    # First chunk failed — meter doesn't support the 15min endpoint.
+                    # Abandon chunking and fetch the entire range in one daily request.
+                    logger.debug(
+                        "amiEnergyUsages15Min returned errors; falling back to "
+                        "amiEnergyUsages for full date range"
+                    )
+                    full_vars = {
+                        **base_vars,
+                        "dateFrom": d_from.isoformat(),
+                        "dateTo": d_to.isoformat(),
+                    }
+                    request = ami_energy_usages_request(variables=full_vars)
+                    try:
+                        response = await self.execute(request, headers=headers, timeout=timeout)
+                    except (RetryExhaustedError, GraphQLError) as e:
+                        if _is_gateway_timeout(e):
+                            logger.warning(
+                                "amiEnergyUsages fallback: 504 on full-range daily request "
+                                "(%s to %s) — returning empty list.",
+                                d_from, d_to,
+                            )
+                            return []
+                        raise
+                    return extract_ami_energy_usages(response)
+                else:
+                    # Mid-run fallback — shouldn't normally happen (same meter, same
+                    # endpoint), but handle gracefully by switching to daily for the
+                    # remainder.
+                    logger.warning(
+                        "amiEnergyUsages15Min returned errors on chunk %d/%d; "
+                        "switching to amiEnergyUsages for remaining chunks",
+                        i + 1,
+                        len(windows),
+                    )
+                    fell_back = True
+                    request = ami_energy_usages_request(variables=variables)
+                    response = await self.execute(request, headers=headers, timeout=timeout)
+                    chunk_results.append(extract_ami_energy_usages(response))
+                    continue
+
+            chunk_results.append(
+                extract_ami_energy_usages(response, root_field="amiEnergyUsages15Min")
+            )
+
+        # Restore chronological order: we iterated newest-first, so reverse the
+        # chunk list before flattening. Records within each chunk keep API order.
+        return [r for chunk in reversed(chunk_results) for r in chunk]
 
     async def get_interval_reads(
         self,
@@ -820,13 +962,20 @@ class NationalGridClient:
             start_datetime=datetime_str,
             headers=headers,
         )
-        response = await self.request_rest(
-            rest_request.method,
-            rest_request.path_or_url,
-            params=rest_request.params,
-            json=rest_request.json,
-            data=rest_request.data,
-            headers=rest_request.headers,
-            timeout=timeout,
-        )
+        try:
+            response = await self.request_rest(
+                rest_request.method,
+                rest_request.path_or_url,
+                params=rest_request.params,
+                json=rest_request.json,
+                data=rest_request.data,
+                headers=rest_request.headers,
+                timeout=timeout,
+            )
+        except RestAPIError as e:
+            if e.status == 404:
+                # The NRT API returns 404 when a service point has no interval reads
+                # (e.g. GAS meters). Treat as empty — consistent with other get_* methods.
+                return []
+            raise
         return extract_interval_reads(response)

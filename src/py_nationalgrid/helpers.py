@@ -11,7 +11,7 @@ def create_cookie_jar() -> aiohttp.CookieJar:
 
     Example::
 
-        from aionatgrid import NationalGridClient, NationalGridConfig, create_cookie_jar
+        from py_nationalgrid import NationalGridClient, NationalGridConfig, create_cookie_jar
 
         cookie_jar = create_cookie_jar()
         async with aiohttp.ClientSession(cookie_jar=cookie_jar) as session:

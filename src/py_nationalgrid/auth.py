@@ -6,7 +6,7 @@ import aiohttp
 
 from .oidchelper import LoginData, async_auth_oidc
 
-_LOGGER = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class NationalGridAuth:
@@ -44,7 +44,7 @@ class NationalGridAuth:
         Returns:
             Tuple of (access_token, expires_in_seconds) on success, (None, None) on failure.
         """
-        _LOGGER.debug("Starting login process for National Grid")
+        logger.debug("Starting login process for National Grid")
         return await async_auth_oidc(
             session,
             username,

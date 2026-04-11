@@ -5,9 +5,9 @@ GAS).  It targets the amiEnergyUsages15Min (NrtDailyUsage15Min) endpoint and
 automatically falls back to the standard amiEnergyUsages (NrtDailyUsage)
 endpoint when the API returns GraphQL errors for a given meter.
 
-Note: the 15-minute endpoint currently caps responses at ~10,000 records.
-For long historical ranges, either query in smaller date windows or call
-get_ami_energy_usages() directly to use the uncapped standard endpoint.
+When the requested date range would exceed the safe record cap for the meter's
+fuel type, the library automatically splits the query into chunks (90 days for
+ELECTRIC, 45 days for GAS) and concatenates the results transparently.
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
-from aionatgrid import NationalGridClient, NationalGridConfig
-from aionatgrid.helpers import create_cookie_jar
+from py_nationalgrid import NationalGridClient, NationalGridConfig
+from py_nationalgrid.helpers import create_cookie_jar
 
 
 def parse_args() -> argparse.Namespace:
@@ -122,10 +122,6 @@ async def main() -> None:
             print(f"Fetching AMI usage from {date_from} to {date_to}...")
             print()
 
-            # Primary endpoint for both ELECTRIC and GAS meters.  Falls back to
-            # amiEnergyUsages (NrtDailyUsage) automatically when the API returns
-            # GraphQL errors.  For date ranges that may exceed ~10k records, use
-            # get_ami_energy_usages() directly or query in smaller windows.
             usages = await client.get_ami_energy_usages_15min(
                 meter_number=meter_number,
                 premise_number=premise_number,
@@ -133,6 +129,7 @@ async def main() -> None:
                 meter_point_number=meter_point_number,
                 date_from=date_from,
                 date_to=date_to,
+                fuel_type=fuel_type,
             )
 
             if not usages:

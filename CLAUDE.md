@@ -32,6 +32,7 @@ uv run python examples/account-info.py --username user@example.com --password se
 uv run python examples/interval-reads.py --username user@example.com --password secret
 uv run python examples/energy-usage.py --username user@example.com --password secret
 uv run python examples/ami-usage.py --username user@example.com --password secret
+uv run python examples/ami-usage.py --username user@example.com --password secret --fuel-type ELECTRIC --days 45
 ```
 
 ### Makefile Shortcuts
@@ -48,7 +49,7 @@ make clean      # Remove cache directories
 ## Architecture Overview
 
 ### Core Client Design
-The package is built around `NationalGridClient` (src/aionatgrid/client.py), an async context manager that:
+The package is built around `NationalGridClient` (src/py_nationalgrid/client.py), an async context manager that:
 - Manages a single reusable `aiohttp.ClientSession` with configurable timeouts
 - Handles OIDC authentication via Azure AD B2C (configured in auth.py with tenant/policy constants)
 - Caches access tokens with thread-safe locking (`_auth_lock`) to prevent duplicate login requests
@@ -84,9 +85,10 @@ Internal helper functions like `linked_billing_accounts_request()` provide pre-c
 ### Configuration Management
 `NationalGridConfig` (config.py) is a dataclass with:
 - `build_headers()` method that merges authentication, subscription keys, and custom headers
-- `with_overrides()` for creating modified config instances
-- Hard-coded subscription key (`e674f89d7ed9417194de894b701333dd`) required for API access
+- `with_overrides()` for creating modified config instances — uses `dataclasses.replace()` internally (not `asdict`, which would flatten nested dataclasses like `RetryConfig` into plain dicts)
+- Hard-coded subscription key (`e674f89d7ed9417194de894b701333dd`) required for API access; this is the National Grid web portal's shared key (same for all users) and is overridable via `NationalGridConfig(subscription_key=...)`
 - Credentials (username/password) must be passed explicitly; no environment variable loading
+- Default connection pool: 10 total / 10 per host (tuned for single-API consumer usage)
 
 ### Request/Response Abstractions
 - `GraphQLRequest`/`GraphQLResponse` (graphql.py): Internal wrappers around GraphQL payloads
@@ -100,10 +102,49 @@ The public API consists of typed `get_*` methods on `NationalGridClient`:
 - `get_billing_account()` → `BillingAccount`
 - `get_energy_usage_costs()` → `list[EnergyUsageCost]`
 - `get_energy_usages()` → `list[EnergyUsage]`
-- `get_ami_energy_usages()` → `list[AmiEnergyUsage]`
-- `get_interval_reads()` → `list[IntervalRead]`
+- `get_ami_energy_usages_15min()` → `list[AmiEnergyUsage]` — **primary AMI method**; see section below
+- `get_ami_energy_usages()` → `list[AmiEnergyUsage]` — daily fallback; used automatically by `get_ami_energy_usages_15min()`
+- `get_interval_reads()` → `list[IntervalRead]` — returns `[]` on 404 (GAS meters with no interval data)
 
 Each method builds a request internally, executes it via `execute()` or `request_rest()`, and extracts the typed result using extractors (extractors.py). All response models are TypedDicts defined in models.py.
+
+### AMI 15-Minute Endpoint (`get_ami_energy_usages_15min`)
+
+This is the primary method for AMI data and handles three National Grid API constraints automatically.
+
+#### 1. Record cap and chunking
+The `amiEnergyUsages15Min` (`NrtDailyUsage15Min`) endpoint caps responses at ~10,000 records.
+The Azure Application Gateway also enforces a backend timeout that cuts off range queries spanning more than roughly 45 days — whichever limit hits first.
+
+The method automatically splits any date range that would exceed 45 days into chunks and concatenates results:
+
+```python
+# Constants in client.py
+AMI_CHUNK_DAYS_ELECTRIC = 45  # 96 records/day × 45 = 4,320 (well inside 10k cap)
+AMI_CHUNK_DAYS_GAS      = 45  # 24 records/day × 45 = 1,080
+AMI_CHUNK_DAYS_DEFAULT  = 45  # conservative fallback when fuel_type is unknown
+```
+
+Chunks are built oldest-to-newest and then **reversed** before iteration so that the newest chunk is always requested first. This guarantees recent data is collected before any older chunk might hit the cold-storage boundary.
+
+#### 2. Cold storage / 504 graceful truncation
+National Grid serves approximately the last 45 days from today from hot storage. Data older than that sits in cold/archive storage. Any range query into cold storage — even a single-day request — receives a 504 Gateway Timeout from the Azure Application Gateway; this is a server-side constraint with no client-side workaround.
+
+When a chunk returns a 504, the method:
+- Detects it via `_is_gateway_timeout()` helper (checks `GraphQLError.status == 504` or `RetryExhaustedError.last_error.status == 504`)
+- Logs a `WARNING` with the chunk index, date range, and record count collected so far
+- **Stops iterating** (breaks the chunk loop) and returns whatever records were already collected from more-recent chunks
+
+**Callers must not assume the returned list spans the full requested date range.** Request 180 days → receive ~45 days of records, no exception raised.
+
+Note: `_should_retry()` in `client.py` short-circuits retries for `GraphQLError(status=504)` — cold-storage 504s are deterministic, so retrying wastes time. The `RetryConfig` still includes 504 in `retry_on_status` for transient gateway load on other endpoints.
+
+#### 3. Daily-endpoint fallback
+Some meters do not support the 15-minute operation and return a GraphQL errors response (e.g. `"Unable to cast object of type 'System.DateTime'"`). When this happens:
+- **First chunk errors**: the method abandons chunking entirely and issues a single full-range request against the standard daily endpoint (`amiEnergyUsages` / `NrtDailyUsage`). This covers the full requested date range in one shot.
+- **Mid-run errors** (i > 0, same endpoint, unexpected): the method switches to daily for all remaining chunks and continues.
+
+The `fell_back` flag in the chunk loop tracks which path is active.
 
 ## Testing Patterns
 
@@ -112,20 +153,24 @@ Tests use mocked `aiohttp.ClientSession` objects with custom response classes (`
 - Verify header merging (auth token, subscription key, custom headers)
 - Test endpoint routing for multi-endpoint queries
 - Use `pytest-asyncio` for async test support (all tests marked with `@pytest.mark.asyncio`)
+- 504 / graceful-truncation tests use `monkeypatch.setattr(client, "execute", AsyncMock(...))` directly on the client instance to avoid simulating the full HTTP retry machinery
+
+Chunk-ordering tests set `mock_session.post.side_effect` in **newest-chunk-first** order because chunks are iterated newest-first after `windows.reverse()`.
 
 ## Key Constraints
 
-- Python 3.10+ required (uses `slots=True`, match statements, and modern type hints)
+- Python 3.10+ required (uses `slots=True` and modern type hints)
 - `uv` is the required dependency manager (not pip or poetry)
 - All GraphQL requests require `ocp-apim-subscription-key` header (configured in config.py)
 - OIDC authentication is mandatory for production usage (username/password required)
 - Session management follows context manager pattern (prefer `async with` over manual `close()`)
 - Access tokens expire after ~1 hour and are automatically refreshed 5 minutes before expiration
-- JWT signature verification requires network access to fetch signing keys from JWKS endpoint
+- JWT signature verification (for the ID token) requires network access to fetch signing keys from the JWKS endpoint; `PyJWKClient` instances are cached at module level in `oidchelper.py` to avoid a HTTPS round-trip on every login
 
 ## Security
 
-- **JWT Verification**: ID tokens are cryptographically verified using PyJWT with RS256 signature validation
+- **JWT Verification**: ID tokens are cryptographically verified using PyJWT with RS256 signature validation and full claim checks (exp, iss, aud)
+- **Access Token sub Extraction**: The `sub` claim is read from the access token without signature verification — intentional, because Azure AD B2C's JWKS endpoint returns 403 for access-token key lookup; the token is received directly from the token endpoint over TLS so its origin is already trusted
 - **Token Expiration**: Access tokens are tracked and automatically refreshed before expiration
 - **Session Reuse**: Authentication reuses the client's session instead of creating duplicate connections
 - **Robust Parsing**: Settings extraction uses dual-strategy parsing (string slicing + regex fallback)

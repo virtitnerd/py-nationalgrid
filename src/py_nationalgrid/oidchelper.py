@@ -18,7 +18,17 @@ from jwt import PyJWKClient
 from .exceptions import CannotConnectError, InvalidAuthError
 from .helpers import create_cookie_jar
 
-_LOGGER = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+
+# Module-level cache so the JWKS signing keys are fetched once and reused across
+# logins rather than making a fresh HTTPS round-trip on every authentication call.
+_jwks_clients: dict[str, PyJWKClient] = {}
+
+
+def _get_jwks_client(jwks_uri: str) -> PyJWKClient:
+    if jwks_uri not in _jwks_clients:
+        _jwks_clients[jwks_uri] = PyJWKClient(jwks_uri)
+    return _jwks_clients[jwks_uri]
 
 
 class LoginData(TypedDict, total=False):
@@ -57,7 +67,7 @@ async def async_auth_oidc(
             **Important**: If providing your own session, ensure it uses a
             CookieJar with quote_cookie=False for Azure AD B2C compatibility::
 
-                from aionatgrid import create_cookie_jar
+                from py_nationalgrid import create_cookie_jar
                 cookie_jar = create_cookie_jar()
                 session = aiohttp.ClientSession(cookie_jar=cookie_jar)
 
@@ -90,15 +100,16 @@ async def async_auth_oidc(
         active_session = aiohttp.ClientSession(connector=connector, cookie_jar=create_cookie_jar())
     else:
         # session is guaranteed non-None here since owns_session = (session is None)
-        assert session is not None
+        if session is None:
+            raise RuntimeError("session cannot be None when owns_session is False")
         active_session = session
 
     try:
         code_verifier = _generate_code_verifier()
         code_challenge = _generate_code_challenge(code_verifier)
-        _LOGGER.debug("Generated PKCE code verifier and challenge")
+        logger.debug("Generated PKCE code verifier and challenge")
         config = await _get_config(active_session, base_url, tenant_id, policy, timeout=timeout)
-        _LOGGER.debug("Retrieved OAuth configuration")
+        logger.debug("Retrieved OAuth configuration")
         auth_code, sub_value = await _get_auth(
             active_session,
             config,
@@ -116,9 +127,9 @@ async def async_auth_oidc(
         if sub_value and login_data is not None:
             login_data["sub"] = sub_value
         if auth_code is None:
-            _LOGGER.error("Failed to obtain authorization code")
+            logger.error("Failed to obtain authorization code")
             raise CannotConnectError("Failed to obtain authorization code")
-        _LOGGER.debug("Obtained authorization code")
+        logger.debug("Obtained authorization code")
 
         tokens = await _get_access(
             active_session,
@@ -132,13 +143,13 @@ async def async_auth_oidc(
         )
 
         if tokens and "access_token" in tokens:
-            _LOGGER.debug("Successfully obtained access token")
+            logger.debug("Successfully obtained access token")
             # Default to 3600 seconds (1 hour) if not provided
             expires_in = tokens.get("expires_in", 3600)
             # Guard against server returning nonsensical values (zero, negative,
             # or an impossibly large lifetime that would prevent refresh).
             if not isinstance(expires_in, int) or not (60 <= expires_in <= 86400):
-                _LOGGER.warning(
+                logger.warning(
                     "Unexpected expires_in value %r from token endpoint, defaulting to 3600",
                     expires_in,
                 )
@@ -150,14 +161,14 @@ async def async_auth_oidc(
                 sub_value = _extract_sub_from_token(access_token)
                 if sub_value:
                     login_data["sub"] = sub_value
-                    _LOGGER.debug("Extracted sub from access token: %s", sub_value)
+                    logger.debug("Extracted sub from access token: %s", sub_value)
 
             return access_token, expires_in
-        _LOGGER.error("Failed to obtain access token")
+        logger.error("Failed to obtain access token")
         raise CannotConnectError("Failed to obtain access token")
 
     except aiohttp.ClientError as err:
-        _LOGGER.exception("Connection error during login")
+        logger.exception("Connection error during login")
         raise CannotConnectError(f"Connection error: {err}") from err
     finally:
         if owns_session:
@@ -192,20 +203,21 @@ def _generate_code_challenge(code_verifier: str) -> str:
 
 
 def _extract_sub_from_token(token: str) -> str | None:
-    """Extract sub claim from a JWT token without signature verification.
+    """Extract the sub claim from a JWT access token without signature verification.
 
-    This is safe because we trust the token came from a legitimate source
-    (our own OAuth flow) and we only need to read the claims.
+    Signature verification is intentionally skipped: the token is received
+    directly from the Azure AD B2C token endpoint over TLS, so its origin is
+    already trusted.  Attempting to verify against the JWKS endpoint fails with
+    403 because B2C restricts JWKS access for access tokens differently from ID
+    tokens.  We only read the sub claim — no authorization decisions are made on
+    this value alone.
     """
     try:
-        # Decode without verification - we just need to read the claims
         claims = jwt.decode(token, options={"verify_signature": False})
         sub = claims.get("sub")
-        if sub:
-            return str(sub)
-        return None
+        return str(sub) if sub else None
     except jwt.InvalidTokenError as e:
-        _LOGGER.warning("Failed to decode token for sub extraction: %s", e)
+        logger.warning("Failed to decode token for sub extraction: %s", e)
         return None
 
 
@@ -214,12 +226,16 @@ async def _get_config(
 ) -> ConfigDict:
     """Get the configuration from the server."""
     config_url = f"{base_url}/{tenant_id}/{policy}/v2.0/.well-known/openid-configuration"
-    _LOGGER.debug("Fetching OAuth configuration from: %s", config_url)
+    logger.debug("Fetching OAuth configuration from: %s", config_url)
     config_text, _, status = await _fetch(session, config_url, timeout)
     if status != 200 or not config_text:
-        _LOGGER.error("Failed to get configuration. Status: %s", status)
+        logger.error("Failed to get configuration. Status: %s", status)
         raise CannotConnectError("Failed to get configuration")
-    config: ConfigDict = json.loads(config_text)
+    try:
+        config: ConfigDict = json.loads(config_text)
+    except json.JSONDecodeError as e:
+        logger.error("Invalid JSON in OpenID configuration response: %s", e)
+        raise CannotConnectError(f"Invalid JSON in OpenID configuration response: {e}") from e
     return config
 
 
@@ -246,20 +262,20 @@ async def _get_auth(
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
     }
-    _LOGGER.debug("Requesting authorization code")
+    logger.debug("Requesting authorization code")
     auth_content, final_url, status = await _fetch(
         session, config["authorization_endpoint"], timeout, params=auth_params
     )
     if status != 200 or not auth_content:
-        _LOGGER.error("Failed to get authorization. Status: %s", status)
+        logger.error("Failed to get authorization. Status: %s", status)
         raise CannotConnectError("Failed to get authorization")
 
     settings = _extract_settings(auth_content)
     if not settings:
-        _LOGGER.debug("No settings extracted, checking for direct authorization code")
+        logger.debug("No settings extracted, checking for direct authorization code")
         return _extract_auth_result(final_url, redirect_uri, config, client_id)
 
-    _LOGGER.debug("Posting credentials")
+    logger.debug("Posting credentials")
     await _post_credentials(
         session,
         config["issuer"],
@@ -270,7 +286,7 @@ async def _get_auth(
         self_asserted_endpoint,
         timeout,
     )
-    _LOGGER.debug("Confirming sign-in")
+    logger.debug("Confirming sign-in")
     return await _confirm_signin(
         session,
         config["issuer"],
@@ -303,14 +319,18 @@ async def _get_access(
         "code_verifier": code_verifier,
         "scope": scope_access,
     }
-    _LOGGER.debug("Requesting access token")
+    logger.debug("Requesting access token")
     token_content, _, status = await _fetch(
         session, config["token_endpoint"], timeout, method="POST", data=token_data
     )
     if status != 200 or not token_content:
-        _LOGGER.error("Failed to get access token. Status: %s", status)
+        logger.error("Failed to get access token. Status: %s", status)
         raise CannotConnectError("Failed to get access token")
-    tokens: TokenDict = json.loads(token_content)
+    try:
+        tokens: TokenDict = json.loads(token_content)
+    except json.JSONDecodeError as e:
+        logger.error("Invalid JSON in token response: %s", e)
+        raise CannotConnectError(f"Invalid JSON in token response: {e}") from e
     return tokens
 
 
@@ -321,19 +341,19 @@ async def _fetch(
     method = kwargs.pop("method", "GET")
     timeout_obj = aiohttp.ClientTimeout(total=timeout)
     try:
-        _LOGGER.debug("Fetching URL: %s, Method: %s", url, method)
+        logger.debug("Fetching URL: %s, Method: %s", url, method)
         async with session.request(method, url, timeout=timeout_obj, **kwargs) as response:
             content = await response.text()
-            _LOGGER.debug("Fetch completed. Status: %s", response.status)
+            logger.debug("Fetch completed. Status: %s", response.status)
             return content, str(response.url), response.status
-    except aiohttp.ClientError:
-        _LOGGER.exception("Network error occurred")
-        raise CannotConnectError("Network error occurred")
+    except aiohttp.ClientError as err:
+        logger.exception("Network error occurred")
+        raise CannotConnectError("Network error occurred") from err
 
 
 def _extract_settings(auth_content: str) -> dict[str, Any] | None:
     """Extract settings from the authorization content using multiple strategies."""
-    _LOGGER.debug("Extracting settings from authorization content")
+    logger.debug("Extracting settings from authorization content")
 
     # Strategy 1: String slicing (original method, fastest)
     settings_start = auth_content.find("var SETTINGS = ")
@@ -343,10 +363,10 @@ def _extract_settings(auth_content: str) -> dict[str, Any] | None:
             settings_json = auth_content[settings_start + 15 : settings_end].strip()
             try:
                 settings: dict[str, Any] = json.loads(settings_json)
-                _LOGGER.debug("Settings extracted via string slicing")
+                logger.debug("Settings extracted via string slicing")
                 return settings
             except json.JSONDecodeError:
-                _LOGGER.warning("String slicing extracted invalid JSON, trying regex")
+                logger.warning("String slicing extracted invalid JSON, trying regex")
 
     # Strategy 2: Regex pattern matching (more robust fallback)
     # Matches: var SETTINGS = {...}; or var SETTINGS={...};
@@ -356,12 +376,12 @@ def _extract_settings(auth_content: str) -> dict[str, Any] | None:
         settings_json = match.group(1).strip()
         try:
             settings = json.loads(settings_json)
-            _LOGGER.debug("Settings extracted via regex")
+            logger.debug("Settings extracted via regex")
             return settings
         except json.JSONDecodeError:
-            _LOGGER.exception("Failed to parse settings JSON from regex match")
+            logger.exception("Failed to parse settings JSON from regex match")
 
-    _LOGGER.debug(
+    logger.debug(
         "Could not extract settings from authorization content; "
         "will fall back to checking for a direct authorization code in the redirect URL"
     )
@@ -389,7 +409,7 @@ def _check_b2c_error_response(content: str) -> tuple[str, str] | None:
             globalex = json.loads(globalex_text)
             detail = globalex.get("Detail", "Unknown error")
             correlation_id = globalex.get("CorrelationId", "")
-            _LOGGER.debug("B2C error detected. CorrelationId: %s", correlation_id)
+            logger.debug("B2C error detected. CorrelationId: %s", correlation_id)
             return ("B2C_EXCEPTION", detail)
         except json.JSONDecodeError:
             pass
@@ -432,7 +452,7 @@ async def _post_credentials(
 ) -> None:
     """Post credentials to the server."""
     base_url = issuer.rsplit("/", 2)[0]
-    _LOGGER.debug("Posting credentials to %s", base_url)
+    logger.debug("Posting credentials to %s", base_url)
     response_content, _, status = await _fetch(
         session,
         f"{base_url}/{policy}/{self_asserted_endpoint}",
@@ -448,7 +468,7 @@ async def _post_credentials(
         headers={"X-CSRF-TOKEN": settings["csrf"]},
     )
     if status != 200:
-        _LOGGER.error("Failed to post credentials. Status: %s", status)
+        logger.error("Failed to post credentials. Status: %s", status)
         raise InvalidAuthError("Invalid username or password")
 
     # Check response body for B2C errors (B2C returns 200 even on auth failures)
@@ -456,12 +476,12 @@ async def _post_credentials(
         error_info = _check_b2c_error_response(response_content)
         if error_info:
             error_type, error_detail = error_info
-            _LOGGER.error("B2C authentication error: %s - %s", error_type, error_detail)
+            logger.error("B2C authentication error: %s - %s", error_type, error_detail)
             if "password" in error_detail.lower() or "credential" in error_detail.lower():
                 raise InvalidAuthError(f"Invalid username or password: {error_detail}")
             raise CannotConnectError(f"Authentication failed: {error_detail}")
 
-    _LOGGER.debug("Credentials posted successfully")
+    logger.debug("Credentials posted successfully")
 
 
 async def _confirm_signin(
@@ -477,7 +497,7 @@ async def _confirm_signin(
 ) -> tuple[str | None, str | None]:
     """Confirm the sign-in process."""
     base_url = issuer.rsplit("/", 2)[0]
-    _LOGGER.debug("Confirming sign-in at %s", base_url)
+    logger.debug("Confirming sign-in at %s", base_url)
     _, final_url, status = await _fetch(
         session,
         f"{base_url}/{policy}/{policy_confirm_endpoint}",
@@ -491,26 +511,26 @@ async def _confirm_signin(
         allow_redirects=True,
     )
     if status != 200:
-        _LOGGER.error("Failed to confirm signin. Status: %s", status)
+        logger.error("Failed to confirm signin. Status: %s", status)
         if status == 403:
             raise InvalidAuthError("Invalid username or password")
         raise CannotConnectError("Failed to confirm signin")
     if final_url:
         auth_code, sub_value = _extract_auth_result(final_url, redirect_uri, config, client_id)
         if auth_code:
-            _LOGGER.debug("Sign-in confirmed, authorization code obtained")
+            logger.debug("Sign-in confirmed, authorization code obtained")
         else:
             parsed_params = _parse_redirect_params(final_url)
             if "error" in parsed_params:
-                _LOGGER.error(
+                logger.error(
                     "Sign-in failed with error: %s, %s",
                     parsed_params.get("error"),
                     parsed_params.get("error_description"),
                 )
                 raise InvalidAuthError("Sign-in failed")
-            _LOGGER.warning("Sign-in confirmed, but no authorization code found")
+            logger.warning("Sign-in confirmed, but no authorization code found")
         return auth_code, sub_value
-    _LOGGER.warning("Sign-in confirmation did not result in a final URL")
+    logger.warning("Sign-in confirmation did not result in a final URL")
     return None, None
 
 
@@ -554,9 +574,7 @@ def _extract_sub_from_id_token(
         return None
 
     try:
-        # Use PyJWKClient to fetch and cache the signing keys from the JWKS endpoint
-        jwks_client = PyJWKClient(config["jwks_uri"])
-        signing_key = jwks_client.get_signing_key_from_jwt(id_token)
+        signing_key = _get_jwks_client(config["jwks_uri"]).get_signing_key_from_jwt(id_token)
 
         # Verify the token signature and validate claims
         claims = jwt.decode(
@@ -576,18 +594,18 @@ def _extract_sub_from_id_token(
 
         sub_value = claims.get("sub")
         if sub_value:
-            _LOGGER.debug("Extracted and verified sub from id_token")
+            logger.debug("Extracted and verified sub from id_token")
             return str(sub_value)
         else:
-            _LOGGER.warning("sub claim not found in verified id_token")
+            logger.warning("sub claim not found in verified id_token")
             return None
 
     except jwt.ExpiredSignatureError:
-        _LOGGER.error("id_token has expired")
+        logger.error("id_token has expired")
         return None
     except jwt.InvalidTokenError as e:
-        _LOGGER.error("id_token validation failed: %s", e)
+        logger.error("id_token validation failed: %s", e)
         return None
     except Exception as e:
-        _LOGGER.exception("Unexpected error validating id_token: %s", e)
+        logger.exception("Unexpected error validating id_token: %s", e)
         return None

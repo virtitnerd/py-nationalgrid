@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import Any
 
 DEFAULT_ENDPOINT = "https://myaccount.nationalgrid.com/api/user-cu-uwp-gql"
 DEFAULT_TIMEOUT = 30.0
@@ -36,8 +37,8 @@ class NationalGridConfig:
     verify_ssl: bool = True
     retry_config: RetryConfig = field(default_factory=RetryConfig)
     # Connection pool settings
-    connection_limit: int = 100  # Total connection pool size
-    connection_limit_per_host: int = 30  # Connections per individual host
+    connection_limit: int = 10  # Total connection pool size
+    connection_limit_per_host: int = 10  # Connections per individual host
     dns_cache_ttl: int = 300  # DNS cache TTL in seconds
 
     def build_headers(
@@ -63,9 +64,6 @@ class NationalGridConfig:
             headers.update(extra_headers)
         return headers
 
-    def with_overrides(self, **overrides: object) -> NationalGridConfig:
+    def with_overrides(self, **overrides: Any) -> NationalGridConfig:
         """Return a cloned config with updated fields."""
-
-        data = asdict(self)
-        data.update(overrides)
-        return NationalGridConfig(**data)
+        return replace(self, **overrides)

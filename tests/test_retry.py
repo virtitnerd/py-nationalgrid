@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import aiohttp
 import pytest
 
-from aionatgrid import (
+from py_nationalgrid import (
     GraphQLError,
     NationalGridClient,
     NationalGridConfig,
@@ -15,7 +15,7 @@ from aionatgrid import (
     RetryConfig,
     RetryExhaustedError,
 )
-from aionatgrid.graphql import GraphQLRequest
+from py_nationalgrid.graphql import GraphQLRequest
 
 
 class _MockResponse:
@@ -72,7 +72,7 @@ async def test_retry_on_500_error(monkeypatch: pytest.MonkeyPatch):
     async def _fake_login(self, session, username, password, login_data, timeout):
         return "token", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     client = NationalGridClient(config=config, session=session)
     request = GraphQLRequest(query="query Test { value }")
@@ -96,7 +96,7 @@ async def test_retry_exhausted_raises_error(monkeypatch: pytest.MonkeyPatch):
     async def _fake_login(self, session, username, password, login_data, timeout):
         return "token", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     client = NationalGridClient(config=config, session=session)
     request = GraphQLRequest(query="query Test { value }")
@@ -139,7 +139,7 @@ async def test_401_clears_token_and_retries(monkeypatch: pytest.MonkeyPatch):
         login_count += 1
         return f"token_{login_count}", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     client = NationalGridClient(config=config, session=session)
     request = GraphQLRequest(query="query Test { value }")
@@ -166,7 +166,7 @@ async def test_graphql_error_includes_context(monkeypatch: pytest.MonkeyPatch):
     async def _fake_login(self, session, username, password, login_data, timeout):
         return "token", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     client = NationalGridClient(config=config, session=session)
     request = GraphQLRequest(
@@ -205,7 +205,7 @@ async def test_rest_api_error_includes_context(monkeypatch: pytest.MonkeyPatch):
     async def _fake_login(self, session, username, password, login_data, timeout):
         return "token", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     client = NationalGridClient(config=config, session=session)
 
@@ -243,7 +243,7 @@ async def test_no_retry_on_400_error(monkeypatch: pytest.MonkeyPatch):
     async def _fake_login(self, session, username, password, login_data, timeout):
         return "token", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     client = NationalGridClient(config=config, session=session)
     request = GraphQLRequest(query="query Test { value }")
@@ -276,7 +276,7 @@ async def test_retry_on_timeout(monkeypatch: pytest.MonkeyPatch):
     async def _fake_login(self, session, username, password, login_data, timeout):
         return "token", 3600
 
-    monkeypatch.setattr("aionatgrid.client.NationalGridAuth.async_login", _fake_login)
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
     client = NationalGridClient(config=config, session=session)
     request = GraphQLRequest(query="query Test { value }")
@@ -302,6 +302,35 @@ async def test_custom_retry_config():
     assert config.retry_config.initial_delay == 0.5
     assert config.retry_config.max_delay == 20.0
     assert config.retry_config.exponential_base == 3.0
+
+
+@pytest.mark.asyncio
+async def test_no_retry_on_504_graphql_error(monkeypatch: pytest.MonkeyPatch):
+    """GraphQL 504s (cold-storage boundary) must not be retried — they are deterministic."""
+    config = NationalGridConfig(retry_config=RetryConfig(max_attempts=3, initial_delay=0.01))
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.closed = False
+    call_count = 0
+
+    def mock_post(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return _MockResponse({}, status=504, raise_on_status=True)
+
+    session.post = mock_post
+
+    async def _fake_login(self, session, username, password, login_data, timeout):
+        return "token", 3600
+
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
+
+    client = NationalGridClient(config=config, session=session)
+    request = GraphQLRequest(query="query Test { value }")
+
+    with pytest.raises((GraphQLError, RetryExhaustedError)):
+        await client.execute(request)
+
+    assert call_count == 1  # must not retry on 504
 
 
 def test_retry_delay_calculation():

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aionatgrid.config import DEFAULT_ENDPOINT, NationalGridConfig
+from py_nationalgrid.config import DEFAULT_ENDPOINT, NationalGridConfig
 
 
 def test_default_config_values() -> None:
@@ -37,8 +37,8 @@ def test_build_headers_merges_overrides() -> None:
 def test_connection_pool_defaults() -> None:
     """Verify default connection pool settings."""
     config = NationalGridConfig()
-    assert config.connection_limit == 100
-    assert config.connection_limit_per_host == 30
+    assert config.connection_limit == 10
+    assert config.connection_limit_per_host == 10
     assert config.dns_cache_ttl == 300
 
 

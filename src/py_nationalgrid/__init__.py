@@ -1,4 +1,4 @@
-"""Public package exports for aionatgrid."""
+"""Public package exports for py_nationalgrid."""
 
 from .client import NationalGridClient
 from .config import NationalGridConfig, RetryConfig
