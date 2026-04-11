@@ -3,7 +3,7 @@
 ## [0.5.0] — 2026-04-11
 
 First release of the **py-nationalgrid** fork (forked from the abandoned
-[aionatgrid](https://github.com/bvlaicu/aionatgrid) 0.4.0).
+[aionatgrid](https://github.com/RyanMorash/aionatgrid) 0.4.0).
 
 ### Added
 
