@@ -1,5 +1,7 @@
 """Public package exports for py_nationalgrid."""
 
+from importlib.metadata import version as _pkg_version
+
 from .client import NationalGridClient
 from .config import NationalGridConfig, RetryConfig
 from .exceptions import (
@@ -31,7 +33,10 @@ from .models import (
 )
 from .oidchelper import LoginData
 
+__version__: str = _pkg_version("py-nationalgrid")
+
 __all__ = [
+    "__version__",
     "NationalGridClient",
     "NationalGridConfig",
     "RetryConfig",
