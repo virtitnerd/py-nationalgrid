@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "wheel", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "py-nationalgrid"
-version = "0.0.0-dev"
+dynamic = ["version"]
 description = "Async Python client for National Grid built on aiohttp"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -67,6 +67,8 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "@overload",
 ]
+
+[tool.setuptools_scm]
 
 [tool.ruff]
 line-length = 100
