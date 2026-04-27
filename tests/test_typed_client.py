@@ -513,15 +513,15 @@ async def test_electric_chunking_splits_into_correct_windows(
     # 2024-01-01 to 2024-04-29 = 120 days → 3 chunks (45 + 45 + 30)
     # Chunks are fetched newest-first: (Mar 31–Apr 29), (Feb 15–Mar 30), (Jan 1–Feb 14)
     mock_session.post.side_effect = [
-        _DummyResponse(_ami_15min_payload(
-            [{"date": "2024-04-10", "fuelType": "ELECTRIC", "quantity": 3.0}]
-        )),
-        _DummyResponse(_ami_15min_payload(
-            [{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.0}]
-        )),
-        _DummyResponse(_ami_15min_payload(
-            [{"date": "2024-01-15", "fuelType": "ELECTRIC", "quantity": 1.0}]
-        )),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-04-10", "fuelType": "ELECTRIC", "quantity": 3.0}])
+        ),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.0}])
+        ),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-01-15", "fuelType": "ELECTRIC", "quantity": 1.0}])
+        ),
     ]
 
     client = NationalGridClient(config=config, session=mock_session)
@@ -563,15 +563,15 @@ async def test_gas_chunking_uses_45_day_windows(
     # 2024-01-01 to 2024-04-01 = 92 days → 3 chunks (45 + 45 + 2)
     # Chunks are fetched newest-first: (Mar 31–Apr 1), (Feb 15–Mar 30), (Jan 1–Feb 14)
     mock_session.post.side_effect = [
-        _DummyResponse(_ami_15min_payload(
-            [{"date": "2024-04-01", "fuelType": "GAS", "quantity": 3.0}]
-        )),
-        _DummyResponse(_ami_15min_payload(
-            [{"date": "2024-02-25", "fuelType": "GAS", "quantity": 2.0}]
-        )),
-        _DummyResponse(_ami_15min_payload(
-            [{"date": "2024-01-10", "fuelType": "GAS", "quantity": 1.0}]
-        )),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-04-01", "fuelType": "GAS", "quantity": 3.0}])
+        ),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-02-25", "fuelType": "GAS", "quantity": 2.0}])
+        ),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-01-10", "fuelType": "GAS", "quantity": 1.0}])
+        ),
     ]
 
     client = NationalGridClient(config=config, session=mock_session)
@@ -609,12 +609,12 @@ async def test_unknown_fuel_type_uses_conservative_45_day_window(
     """fuel_type=None defaults to 45-day chunks (same as ELECTRIC and GAS)."""
     # 50-day range → would be 1 chunk at 90 days but 2 chunks at 45 days
     mock_session.post.side_effect = [
-        _DummyResponse(_ami_15min_payload(
-            [{"date": "2024-01-15", "fuelType": "ELECTRIC", "quantity": 1.0}]
-        )),
-        _DummyResponse(_ami_15min_payload(
-            [{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.0}]
-        )),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-01-15", "fuelType": "ELECTRIC", "quantity": 1.0}])
+        ),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.0}])
+        ),
     ]
 
     client = NationalGridClient(config=config, session=mock_session)
@@ -651,10 +651,12 @@ async def test_fallback_on_first_chunk_uses_full_date_range(
         ),
         # Fallback: daily endpoint returns full range in one shot
         _DummyResponse(
-            _ami_daily_payload([
-                {"date": "2024-01-15", "fuelType": "GAS", "quantity": 5.0},
-                {"date": "2024-03-01", "fuelType": "GAS", "quantity": 6.0},
-            ])
+            _ami_daily_payload(
+                [
+                    {"date": "2024-01-15", "fuelType": "GAS", "quantity": 5.0},
+                    {"date": "2024-03-01", "fuelType": "GAS", "quantity": 6.0},
+                ]
+            )
         ),
     ]
 
@@ -719,9 +721,11 @@ async def test_504_on_later_chunk_returns_partial_results(
 ) -> None:
     """When a later chunk 504s, return the records collected from earlier chunks."""
     good = GraphQLResponse(
-        data={"amiEnergyUsages15Min": {"nodes": [
-            {"date": "2024-01-15", "fuelType": "GAS", "quantity": 1.0}
-        ]}}
+        data={
+            "amiEnergyUsages15Min": {
+                "nodes": [{"date": "2024-01-15", "fuelType": "GAS", "quantity": 1.0}]
+            }
+        }
     )
     err = RetryExhaustedError(
         "Exhausted",
@@ -743,3 +747,472 @@ async def test_504_on_later_chunk_returns_partial_results(
     )
     assert len(usages) == 1
     assert usages[0]["quantity"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_15min_mid_run_fallback_switches_to_daily(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When a mid-run (i>0) chunk returns errors, remaining chunks use daily endpoint."""
+    # 3-chunk range (120 days). Chunks fetched newest-first.
+    # Chunk 0 (newest): 15min succeeds
+    # Chunk 1 (middle): 15min returns errors → switch to daily for remainder
+    # Chunk 2 (oldest): daily succeeds
+    chunk0_ok = GraphQLResponse(
+        data={
+            "amiEnergyUsages15Min": {
+                "nodes": [{"date": "2024-04-15", "fuelType": "ELECTRIC", "quantity": 3.0}]
+            }
+        }
+    )
+    chunk1_errors = GraphQLResponse(
+        data={"amiEnergyUsages15Min": None},
+        errors=[{"message": "mid-run error", "extensions": {"code": "InternalError"}}],
+    )
+    # After fell_back=True, execute is called with daily endpoint
+    chunk1_daily_ok = GraphQLResponse(
+        data={
+            "amiEnergyUsages": {
+                "nodes": [{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.0}]
+            }
+        }
+    )
+    chunk2_daily_ok = GraphQLResponse(
+        data={
+            "amiEnergyUsages": {
+                "nodes": [{"date": "2024-01-15", "fuelType": "ELECTRIC", "quantity": 1.0}]
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(
+        client,
+        "execute",
+        AsyncMock(side_effect=[chunk0_ok, chunk1_errors, chunk1_daily_ok, chunk2_daily_ok]),
+    )
+
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 4, 29),
+        fuel_type="ELECTRIC",
+    )
+
+    # 4 execute calls: 15min(ok), 15min(err), daily(ok), daily(ok)
+    assert client.execute.call_count == 4  # type: ignore[attr-defined]
+    # Results in chronological order
+    assert len(usages) == 3
+    assert usages[0]["quantity"] == 1.0
+    assert usages[1]["quantity"] == 2.0
+    assert usages[2]["quantity"] == 3.0
+
+
+@pytest.mark.asyncio
+async def test_15min_first_chunk_error_then_daily_fallback_504(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First chunk errors on 15min; the full-range daily fallback also 504s → empty list."""
+    first_chunk_errors = GraphQLResponse(
+        data={"amiEnergyUsages15Min": None},
+        errors=[{"message": "cast error", "extensions": {"code": "BadRequest"}}],
+    )
+    daily_504 = RetryExhaustedError(
+        "Exhausted",
+        attempts=3,
+        last_error=GraphQLError("504", endpoint="x", status=504),
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=[first_chunk_errors, daily_504]))
+
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 1, 31),
+    )
+    assert usages == []
+
+
+@pytest.mark.asyncio
+async def test_15min_non_504_exception_propagates(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-504 exception from execute() inside the chunk loop propagates."""
+    err = RetryExhaustedError(
+        "Exhausted",
+        attempts=3,
+        last_error=GraphQLError("500 Internal Server Error", endpoint="x", status=500),
+    )
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=err))
+
+    with pytest.raises(RetryExhaustedError):
+        await client.get_ami_energy_usages_15min(
+            meter_number="M-001",
+            premise_number="PREM-001",
+            service_point_number="SP-001",
+            meter_point_number="MP-001",
+            date_from=date(2024, 1, 1),
+            date_to=date(2024, 1, 5),
+        )
+
+
+@pytest.mark.asyncio
+async def test_15min_fell_back_chunk_504_stops_iteration(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After fell_back=True, a 504 on a daily chunk stops iteration gracefully."""
+    # 3-chunk range. Chunk 0 (newest) 15min ok, chunk 1 15min errors (fell_back=True),
+    # chunk 1 daily ok, chunk 2 daily 504 → stop, return collected so far.
+    chunk0_15min = GraphQLResponse(
+        data={
+            "amiEnergyUsages15Min": {
+                "nodes": [{"date": "2024-04-15", "fuelType": "ELECTRIC", "quantity": 3.0}]
+            }
+        }
+    )
+    chunk1_15min_errors = GraphQLResponse(
+        data={"amiEnergyUsages15Min": None},
+        errors=[{"message": "err", "extensions": {"code": "InternalError"}}],
+    )
+    chunk1_daily_ok = GraphQLResponse(
+        data={
+            "amiEnergyUsages": {
+                "nodes": [{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.0}]
+            }
+        }
+    )
+    chunk2_daily_504 = RetryExhaustedError(
+        "Exhausted",
+        attempts=3,
+        last_error=GraphQLError("504", endpoint="x", status=504),
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(
+        client,
+        "execute",
+        AsyncMock(
+            side_effect=[chunk0_15min, chunk1_15min_errors, chunk1_daily_ok, chunk2_daily_504]
+        ),
+    )
+
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 4, 29),
+        fuel_type="ELECTRIC",
+    )
+
+    # Returned what was collected before the 504 — in chronological order
+    assert len(usages) == 2
+    assert usages[0]["quantity"] == 2.0
+    assert usages[1]["quantity"] == 3.0
+
+
+# ---------------------------------------------------------------------------
+# get_ami_energy_usages() — daily-primary with 15-min fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_returns_daily_data(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Happy path: daily endpoint succeeds → single request, results returned."""
+    mock_session.post.return_value = _DummyResponse(
+        _ami_daily_payload([{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 5.0}])
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    usages = await client.get_ami_energy_usages(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 3, 1),
+        date_to=date(2024, 3, 31),
+    )
+
+    assert mock_session.post.call_count == 1
+    assert len(usages) == 1
+    assert usages[0]["quantity"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_passes_variables(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify correct variables and NrtDailyUsage operation name are sent."""
+    mock_session.post.return_value = _DummyResponse(_ami_daily_payload([]))
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_ami_energy_usages(
+        meter_number="M-123",
+        premise_number=456,
+        service_point_number=789,
+        meter_point_number=101,
+        date_from=date(2024, 3, 1),
+        date_to=date(2024, 3, 31),
+    )
+
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == ENERGY_USAGE_ENDPOINT
+    payload = kwargs["json"]
+    assert payload["operationName"] == "NrtDailyUsage"
+    assert payload["variables"]["meterNumber"] == "M-123"
+    assert payload["variables"]["premiseNumber"] == "456"
+    assert payload["variables"]["servicePointNumber"] == "789"
+    assert payload["variables"]["meterPointNumber"] == "101"
+    assert payload["variables"]["dateFrom"] == "2024-03-01"
+    assert payload["variables"]["dateTo"] == "2024-03-31"
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_accepts_string_dates(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """String date inputs are forwarded unchanged as ISO strings."""
+    mock_session.post.return_value = _DummyResponse(_ami_daily_payload([]))
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_ami_energy_usages(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from="2024-01-01",
+        date_to="2024-12-31",
+    )
+
+    _, kwargs = mock_session.post.call_args
+    variables = kwargs["json"]["variables"]
+    assert variables["dateFrom"] == "2024-01-01"
+    assert variables["dateTo"] == "2024-12-31"
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_falls_back_on_graphql_errors(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When NrtDailyUsage returns has_errors, fall back to get_ami_energy_usages_15min."""
+    error_response = _DummyResponse(
+        {
+            "errors": [{"message": "Upstream error", "extensions": {"code": "InternalError"}}],
+            "data": {"amiEnergyUsages": None},
+        }
+    )
+    mock_session.post.return_value = error_response
+
+    fallback_records = [{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 9.0}]
+    fallback_mock = AsyncMock(return_value=fallback_records)
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "get_ami_energy_usages_15min", fallback_mock)
+
+    usages = await client.get_ami_energy_usages(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 3, 1),
+        date_to=date(2024, 3, 31),
+        fuel_type="ELECTRIC",
+    )
+
+    # Daily was attempted once, then fallback was invoked
+    assert mock_session.post.call_count == 1
+    fallback_mock.assert_called_once_with(
+        "M-001",
+        "PREM-001",
+        "SP-001",
+        "MP-001",
+        date(2024, 3, 1),
+        date(2024, 3, 31),
+        fuel_type="ELECTRIC",
+        headers=None,
+        timeout=None,
+    )
+    assert usages == fallback_records
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_falls_back_on_504(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When NrtDailyUsage hits a 504, fall back to get_ami_energy_usages_15min."""
+    err = RetryExhaustedError(
+        "Exhausted",
+        attempts=3,
+        last_error=GraphQLError("504", endpoint="x", status=504),
+    )
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=err))
+
+    fallback_records = [{"date": "2024-03-01", "fuelType": "GAS", "quantity": 2.5}]
+    fallback_mock = AsyncMock(return_value=fallback_records)
+    monkeypatch.setattr(client, "get_ami_energy_usages_15min", fallback_mock)
+
+    usages = await client.get_ami_energy_usages(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 3, 1),
+        date_to=date(2024, 3, 31),
+        fuel_type="GAS",
+    )
+
+    fallback_mock.assert_called_once()
+    assert usages == fallback_records
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_propagates_non_504_exceptions(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-504 exceptions from execute() propagate — no fallback triggered."""
+    err = RetryExhaustedError(
+        "Exhausted",
+        attempts=3,
+        last_error=GraphQLError("500", endpoint="x", status=500),
+    )
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=err))
+
+    with pytest.raises(RetryExhaustedError):
+        await client.get_ami_energy_usages(
+            meter_number="M-001",
+            premise_number="PREM-001",
+            service_point_number="SP-001",
+            meter_point_number="MP-001",
+            date_from=date(2024, 3, 1),
+            date_to=date(2024, 3, 31),
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_graphql_error_propagates(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare non-504 GraphQLError (not wrapped in RetryExhaustedError) propagates."""
+    err = GraphQLError("403 Forbidden", endpoint="x", status=403)
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=err))
+
+    with pytest.raises(GraphQLError):
+        await client.get_ami_energy_usages(
+            meter_number="M-001",
+            premise_number="PREM-001",
+            service_point_number="SP-001",
+            meter_point_number="MP-001",
+            date_from="2024-03-01",
+            date_to="2024-03-31",
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_fallback_passes_fuel_type(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """fuel_type is forwarded to get_ami_energy_usages_15min() on fallback."""
+    mock_session.post.return_value = _DummyResponse(
+        {"errors": [{"message": "err"}], "data": {"amiEnergyUsages": None}}
+    )
+
+    fallback_mock = AsyncMock(return_value=[])
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "get_ami_energy_usages_15min", fallback_mock)
+
+    await client.get_ami_energy_usages(
+        meter_number="M-001",
+        premise_number="P-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from="2024-01-01",
+        date_to="2024-12-31",
+        fuel_type="GAS",
+    )
+
+    _, kwargs = fallback_mock.call_args
+    assert kwargs["fuel_type"] == "GAS"
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_fallback_triggers_chunking(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """When daily fails, the 15-min fallback chunks a long date range automatically."""
+    # First POST: daily endpoint returns errors
+    # Next 3 POSTs: 15-min chunked requests (120-day range → 3 × 45-day chunks)
+    mock_session.post.side_effect = [
+        _DummyResponse({"errors": [{"message": "err"}], "data": {"amiEnergyUsages": None}}),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-04-10", "fuelType": "ELECTRIC", "quantity": 3.0}])
+        ),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.0}])
+        ),
+        _DummyResponse(
+            _ami_15min_payload([{"date": "2024-01-15", "fuelType": "ELECTRIC", "quantity": 1.0}])
+        ),
+    ]
+
+    client = NationalGridClient(config=config, session=mock_session)
+    usages = await client.get_ami_energy_usages(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 4, 29),
+        fuel_type="ELECTRIC",
+    )
+
+    # 1 daily attempt + 3 chunked 15-min requests
+    assert mock_session.post.call_count == 4
+
+    # First request is the daily attempt
+    daily_payload = mock_session.post.call_args_list[0][1]["json"]
+    assert daily_payload["operationName"] == "NrtDailyUsage"
+
+    # Remaining 3 requests are 15-min chunks (newest-first)
+    chunk1_payload = mock_session.post.call_args_list[1][1]["json"]
+    assert chunk1_payload["operationName"] == "NrtDailyUsage15Min"
+    assert chunk1_payload["variables"]["dateFrom"] == "2024-03-31"
+    assert chunk1_payload["variables"]["dateTo"] == "2024-04-29"
+
+    # Results reassembled in chronological order
+    assert len(usages) == 3
+    assert usages[0]["quantity"] == 1.0
+    assert usages[1]["quantity"] == 2.0
+    assert usages[2]["quantity"] == 3.0
+
+
+@pytest.mark.asyncio
+async def test_get_ami_energy_usages_raises_data_extraction_error(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """DataExtractionError propagates when the daily response is missing the root field."""
+    mock_session.post.return_value = _DummyResponse({"data": {}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+
+    with pytest.raises(DataExtractionError, match="Missing 'amiEnergyUsages' field"):
+        await client.get_ami_energy_usages(
+            meter_number="M-001",
+            premise_number="PREM-001",
+            service_point_number="SP-001",
+            meter_point_number="MP-001",
+            date_from="2024-03-01",
+            date_to="2024-03-31",
+        )

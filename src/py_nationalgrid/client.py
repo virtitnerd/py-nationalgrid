@@ -691,16 +691,20 @@ class NationalGridClient:
         date_from: date | str,
         date_to: date | str,
         *,
+        fuel_type: str | None = None,
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
     ) -> list[AmiEnergyUsage]:
-        """Get AMI hourly energy usage data with typed response.
+        """Get AMI energy usage data — primary recommended method.
 
-        This is the standard ``amiEnergyUsages`` (``NrtDailyUsage``) endpoint.
-        It supports unrestricted date ranges and is used automatically as a
-        fallback by ``get_ami_energy_usages_15min()`` when the 15-minute API
-        returns GraphQL errors for a given meter.  Call this method directly
-        when you want to bypass the 15-minute endpoint entirely.
+        Tries the standard ``amiEnergyUsages`` (``NrtDailyUsage``) endpoint
+        first.  Unlike ``NrtDailyUsage15Min``, this endpoint handles unrestricted
+        date ranges in a single request with no chunking required.
+
+        If ``NrtDailyUsage`` fails (GraphQL errors in the response body, or a
+        504 Gateway Timeout), the method automatically falls back to
+        ``get_ami_energy_usages_15min()``, which targets ``NrtDailyUsage15Min``
+        with automatic date-range chunking.  All other exceptions propagate.
 
         Args:
             meter_number: The meter number
@@ -709,6 +713,9 @@ class NationalGridClient:
             meter_point_number: The meter point number (auto-converts int to str)
             date_from: Start date (date object or ISO string YYYY-MM-DD)
             date_to: End date (date object or ISO string YYYY-MM-DD)
+            fuel_type: Meter fuel type (``"ELECTRIC"`` or ``"GAS"``).  Only used
+                if the fallback to ``get_ami_energy_usages_15min()`` is triggered;
+                controls the chunk window size for that path.
             headers: Additional headers to include
             timeout: Request timeout in seconds
 
@@ -716,9 +723,8 @@ class NationalGridClient:
             List of AMI energy usages
 
         Raises:
-            GraphQLError: When the GraphQL request fails
+            GraphQLError: When the GraphQL request fails with a non-504 error
             DataExtractionError: When the expected data path is missing
-            ValueError: When the response contains GraphQL errors
         """
         from_str = date_from.isoformat() if isinstance(date_from, date) else date_from
         to_str = date_to.isoformat() if isinstance(date_to, date) else date_to
@@ -732,7 +738,47 @@ class NationalGridClient:
                 "dateTo": to_str,
             },
         )
-        response = await self.execute(request, headers=headers, timeout=timeout)
+
+        try:
+            response = await self.execute(request, headers=headers, timeout=timeout)
+        except (RetryExhaustedError, GraphQLError) as e:
+            if not _is_gateway_timeout(e):
+                raise
+            logger.warning(
+                "amiEnergyUsages: 504 Gateway Timeout (%s to %s) — "
+                "falling back to amiEnergyUsages15Min with chunking.",
+                from_str,
+                to_str,
+            )
+            return await self.get_ami_energy_usages_15min(
+                meter_number,
+                premise_number,
+                service_point_number,
+                meter_point_number,
+                date_from,
+                date_to,
+                fuel_type=fuel_type,
+                headers=headers,
+                timeout=timeout,
+            )
+
+        if response.has_errors:
+            logger.warning(
+                "amiEnergyUsages returned GraphQL errors — "
+                "falling back to amiEnergyUsages15Min with chunking."
+            )
+            return await self.get_ami_energy_usages_15min(
+                meter_number,
+                premise_number,
+                service_point_number,
+                meter_point_number,
+                date_from,
+                date_to,
+                fuel_type=fuel_type,
+                headers=headers,
+                timeout=timeout,
+            )
+
         return extract_ami_energy_usages(response)
 
     async def get_ami_energy_usages_15min(
@@ -750,11 +796,14 @@ class NationalGridClient:
     ) -> list[AmiEnergyUsage]:
         """Get AMI 15-minute interval energy usage data with typed response.
 
-        This is the primary AMI method for both ELECTRIC and GAS meters.
-        It targets ``amiEnergyUsages15Min`` (``NrtDailyUsage15Min``), introduced
-        by National Grid in February 2026, and automatically falls back to the
-        standard ``amiEnergyUsages`` (``NrtDailyUsage``) endpoint when the
-        15-minute API returns a GraphQL errors response for a given meter.
+        Targets ``amiEnergyUsages15Min`` (``NrtDailyUsage15Min``) directly.
+        Call this when you explicitly need 15-minute granularity.  For most
+        use cases prefer ``get_ami_energy_usages()``, which tries the daily
+        ``NrtDailyUsage`` endpoint first and falls back here automatically.
+
+        This method automatically falls back to the standard
+        ``amiEnergyUsages`` (``NrtDailyUsage``) endpoint when the 15-minute
+        API returns a GraphQL errors response for a given meter.
 
         When the requested date range exceeds the safe window for the meter's
         fuel type, the query is automatically split into chunks and the results
@@ -829,6 +878,14 @@ class NationalGridClient:
         fell_back = False  # True after the first chunk triggers the daily fallback
 
         for i, (w_from, w_to) in enumerate(windows):
+            logger.debug(
+                "amiEnergyUsages15Min: chunk %d/%d (%s to %s)%s",
+                i + 1,
+                len(windows),
+                w_from,
+                w_to,
+                " [daily fallback]" if fell_back else "",
+            )
             variables = {
                 **base_vars,
                 "dateFrom": w_from.isoformat(),
@@ -846,7 +903,10 @@ class NationalGridClient:
                             "amiEnergyUsages fallback: 504 on chunk %d/%d (%s to %s) — "
                             "data is likely beyond the ~45-day accessible window. "
                             "Returning %d record(s) collected so far.",
-                            i + 1, len(windows), w_from, w_to,
+                            i + 1,
+                            len(windows),
+                            w_from,
+                            w_to,
                             sum(len(c) for c in chunk_results),
                         )
                         break
@@ -867,7 +927,10 @@ class NationalGridClient:
                         "amiEnergyUsages15Min: 504 on chunk %d/%d (%s to %s) — "
                         "data is likely beyond the ~45-day accessible window. "
                         "Returning %d record(s) collected so far.",
-                        i + 1, len(windows), w_from, w_to,
+                        i + 1,
+                        len(windows),
+                        w_from,
+                        w_to,
                         sum(len(c) for c in chunk_results),
                     )
                     break
@@ -894,7 +957,8 @@ class NationalGridClient:
                             logger.warning(
                                 "amiEnergyUsages fallback: 504 on full-range daily request "
                                 "(%s to %s) — returning empty list.",
-                                d_from, d_to,
+                                d_from,
+                                d_to,
                             )
                             return []
                         raise
