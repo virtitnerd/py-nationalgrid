@@ -1,13 +1,16 @@
 """Example that fetches AMI energy usage data.
 
-get_ami_energy_usages_15min() is used for all meter types (both ELECTRIC and
-GAS).  It targets the amiEnergyUsages15Min (NrtDailyUsage15Min) endpoint and
-automatically falls back to the standard amiEnergyUsages (NrtDailyUsage)
-endpoint when the API returns GraphQL errors for a given meter.
+get_ami_energy_usages() is the primary method for AMI data. It tries the
+standard amiEnergyUsages (NrtDailyUsage) endpoint first, which handles
+unrestricted date ranges in a single request with no chunking required.
 
-When the requested date range would exceed the safe record cap for the meter's
-fuel type, the library automatically splits the query into chunks (90 days for
-ELECTRIC, 45 days for GAS) and concatenates the results transparently.
+If NrtDailyUsage returns GraphQL errors or a 504 Gateway Timeout, the method
+automatically falls back to get_ami_energy_usages_15min(), which targets
+amiEnergyUsages15Min (NrtDailyUsage15Min) and splits the date range into
+45-day chunks automatically.
+
+Pass --15min to use the 15-minute endpoint directly (e.g. when you specifically
+need 15-minute granularity rather than hourly/daily data).
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -38,6 +42,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Filter meters by fuel type (e.g. ELECTRIC, GAS). Defaults to first meter found.",
     )
+    parser.add_argument(
+        "--15min",
+        dest="use_15min",
+        action="store_true",
+        help="Use the 15-minute endpoint directly (NrtDailyUsage15Min with chunking).",
+    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
 
@@ -47,6 +58,10 @@ def pretty_print(data: object) -> None:
 
 async def main() -> None:
     args = parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
     config = NationalGridConfig(username=args.username, password=args.password)
 
     cookie_jar = create_cookie_jar()
@@ -89,8 +104,7 @@ async def main() -> None:
                 )
                 if meter is None:
                     available = [
-                        v if isinstance(v := m.get("fuelType"), str) else "unknown"
-                        for m in meters
+                        v if isinstance(v := m.get("fuelType"), str) else "unknown" for m in meters
                     ]
                     print(f"No meter found with fuel type '{args.fuel_type}'.")
                     print(f"Available fuel types: {', '.join(available)}")
@@ -120,17 +134,31 @@ async def main() -> None:
             fuel_type = fuel_type if isinstance(fuel_type, str) else ""
             print(f"Fuel type: {fuel_type}")
             print(f"Fetching AMI usage from {date_from} to {date_to}...")
-            print()
 
-            usages = await client.get_ami_energy_usages_15min(
-                meter_number=meter_number,
-                premise_number=premise_number,
-                service_point_number=service_point_number,
-                meter_point_number=meter_point_number,
-                date_from=date_from,
-                date_to=date_to,
-                fuel_type=fuel_type,
-            )
+            if args.use_15min:
+                print("Endpoint: amiEnergyUsages15Min (NrtDailyUsage15Min, chunked)")
+                print()
+                usages = await client.get_ami_energy_usages_15min(
+                    meter_number=meter_number,
+                    premise_number=premise_number,
+                    service_point_number=service_point_number,
+                    meter_point_number=meter_point_number,
+                    date_from=date_from,
+                    date_to=date_to,
+                    fuel_type=fuel_type,
+                )
+            else:
+                print("Endpoint: amiEnergyUsages (NrtDailyUsage) with 15min fallback")
+                print()
+                usages = await client.get_ami_energy_usages(
+                    meter_number=meter_number,
+                    premise_number=premise_number,
+                    service_point_number=service_point_number,
+                    meter_point_number=meter_point_number,
+                    date_from=date_from,
+                    date_to=date_to,
+                    fuel_type=fuel_type,
+                )
 
             if not usages:
                 print("No AMI energy usage data returned.")

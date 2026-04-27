@@ -33,6 +33,7 @@ uv run python examples/interval-reads.py --username user@example.com --password 
 uv run python examples/energy-usage.py --username user@example.com --password secret
 uv run python examples/ami-usage.py --username user@example.com --password secret
 uv run python examples/ami-usage.py --username user@example.com --password secret --fuel-type ELECTRIC --days 45
+uv run python examples/ami-usage.py --username user@example.com --password secret --15min  # explicit 15-min endpoint
 ```
 
 ### Makefile Shortcuts
@@ -102,15 +103,27 @@ The public API consists of typed `get_*` methods on `NationalGridClient`:
 - `get_billing_account()` → `BillingAccount`
 - `get_energy_usage_costs()` → `list[EnergyUsageCost]`
 - `get_energy_usages()` → `list[EnergyUsage]`
-- `get_ami_energy_usages_15min()` → `list[AmiEnergyUsage]` — **primary AMI method**; see section below
-- `get_ami_energy_usages()` → `list[AmiEnergyUsage]` — daily fallback; used automatically by `get_ami_energy_usages_15min()`
+- `get_ami_energy_usages()` → `list[AmiEnergyUsage]` — **primary AMI method**; tries `NrtDailyUsage` first, falls back to `get_ami_energy_usages_15min()` on failure; see section below
+- `get_ami_energy_usages_15min()` → `list[AmiEnergyUsage]` — explicit 15-min endpoint with automatic chunking; use directly when you need 15-min granularity specifically
 - `get_interval_reads()` → `list[IntervalRead]` — returns `[]` on 404 (GAS meters with no interval data)
 
 Each method builds a request internally, executes it via `execute()` or `request_rest()`, and extracts the typed result using extractors (extractors.py). All response models are TypedDicts defined in models.py.
 
+### Primary AMI Method (`get_ami_energy_usages`)
+
+This is the recommended method for AMI data. It tries `NrtDailyUsage` (the standard daily endpoint) first, which handles unrestricted date ranges in a single request with no chunking. If `NrtDailyUsage` fails, it falls back automatically to `get_ami_energy_usages_15min()`.
+
+**Fallback triggers:**
+- `response.has_errors` is true (GraphQL-level errors in the response body)
+- 504 Gateway Timeout (`_is_gateway_timeout()` helper — wraps both bare `GraphQLError(status=504)` and `RetryExhaustedError` whose `last_error` is a 504)
+
+All other exceptions propagate without fallback.
+
+The `fuel_type` parameter is only used if the fallback path is taken; it controls the chunk window size in `get_ami_energy_usages_15min()`.
+
 ### AMI 15-Minute Endpoint (`get_ami_energy_usages_15min`)
 
-This is the primary method for AMI data and handles three National Grid API constraints automatically.
+Call this directly when you explicitly need 15-minute granularity. It handles three National Grid API constraints automatically.
 
 #### 1. Record cap and chunking
 The `amiEnergyUsages15Min` (`NrtDailyUsage15Min`) endpoint caps responses at ~10,000 records.
