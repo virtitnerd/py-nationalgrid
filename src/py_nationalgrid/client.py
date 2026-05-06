@@ -313,8 +313,8 @@ class NationalGridClient:
 
                 # Calculate delay and retry
                 delay = self._calculate_retry_delay(attempt, retry_config)
-                logger.warning(
-                    "Request failed (%s), retrying in %.2f seconds (attempt %d/%d)",
+                logger.debug(
+                    "GraphQL request failed (%s), retrying in %.2f seconds (attempt %d/%d)",
                     type(e).__name__,
                     delay,
                     attempt + 1,
@@ -323,6 +323,11 @@ class NationalGridClient:
                 await asyncio.sleep(delay)
 
         # All retries exhausted
+        logger.warning(
+            "GraphQL request failed after %d attempt(s) (%s) — giving up",
+            retry_config.max_attempts,
+            type(last_error).__name__ if last_error else "unknown",
+        )
         raise RetryExhaustedError(
             "GraphQL request failed after all retry attempts",
             attempts=retry_config.max_attempts,
@@ -459,8 +464,8 @@ class NationalGridClient:
 
                 # Calculate delay and retry
                 delay = self._calculate_retry_delay(attempt, retry_config)
-                logger.warning(
-                    "Request failed (%s), retrying in %.2f seconds (attempt %d/%d)",
+                logger.debug(
+                    "REST request failed (%s), retrying in %.2f seconds (attempt %d/%d)",
                     type(e).__name__,
                     delay,
                     attempt + 1,
@@ -469,6 +474,11 @@ class NationalGridClient:
                 await asyncio.sleep(delay)
 
         # All retries exhausted
+        logger.warning(
+            "REST request failed after %d attempt(s) (%s) — giving up",
+            retry_config.max_attempts,
+            type(last_error).__name__ if last_error else "unknown",
+        )
         raise RetryExhaustedError(
             "REST request failed after all retry attempts",
             attempts=retry_config.max_attempts,
