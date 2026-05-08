@@ -1,7 +1,5 @@
 """GraphQL query builders for National Grid."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from textwrap import dedent, indent
@@ -13,12 +11,16 @@ DEFAULT_SELECTION_SET = "__typename"
 LINKED_BILLING_ENDPOINT = "https://myaccount.nationalgrid.com/api/user-cu-uwp-gql"
 BILLING_ACCOUNT_INFO_ENDPOINT = "https://myaccount.nationalgrid.com/api/billingaccount-cu-uwp-gql"
 ENERGY_USAGE_ENDPOINT = "https://myaccount.nationalgrid.com/api/energyusage-cu-uwp-gql"
+BILL_ENDPOINT = "https://myaccount.nationalgrid.com/api/bill-cu-uwp-gql"
 LINKED_BILLING_SELECTION_SET = """
 accountLinks {
     totalCount
     nodes {
         accountLinkId
         billingAccountId
+        billingAccount {
+            nextSchedReadingDate
+        }
     }
 }
 """
@@ -71,6 +73,16 @@ nodes {
     date
     fuelType
     quantity
+}
+"""
+BILLS_SELECTION_SET = """
+nodes {
+    dueDate
+    statementDate
+    status
+    accountNumber
+    totalDueAmount
+    currentChargesAmount
 }
 """
 
@@ -261,6 +273,29 @@ def ami_energy_usages_request(
         variable_definitions=variable_definitions,
         field_arguments=field_arguments,
         endpoint=ENERGY_USAGE_ENDPOINT,
+    ).to_request()
+
+
+def bills_request(
+    *,
+    selection_set: str = BILLS_SELECTION_SET,
+    variables: Mapping[str, Any] | None = None,
+    variable_definitions: str | Sequence[str] | None = "$accountNumber: String!",
+    field_arguments: str | None = "accountNumber: $accountNumber, order: [{statementDate: DESC}]",
+    operation_name: str = "BillList",
+) -> GraphQLRequest:
+    """Build a bill history query.
+
+    This request targets the bill-cu-uwp-gql GraphQL endpoint.
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="bills",
+        selection_set=selection_set,
+        variables=variables,
+        variable_definitions=variable_definitions,
+        field_arguments=field_arguments,
+        endpoint=BILL_ENDPOINT,
     ).to_request()
 
 

@@ -1,6 +1,5 @@
-from __future__ import annotations
-
 import logging
+from typing import Self
 from unittest.mock import MagicMock
 
 import aiohttp
@@ -16,7 +15,7 @@ class _DummyResponse:
     def __init__(self, payload: dict[str, object]):
         self._payload = payload
 
-    async def __aenter__(self) -> _DummyResponse:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:  # type: ignore[override]
@@ -35,7 +34,7 @@ class _DummyRestResponse:
         self.headers = {"Content-Type": content_type}
         self.status = 200
 
-    async def __aenter__(self) -> _DummyRestResponse:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:  # type: ignore[override]
@@ -241,7 +240,7 @@ class _DummyResponseWithErrors:
     def __init__(self, errors: list[dict[str, object]]):
         self._payload = {"data": None, "errors": errors}
 
-    async def __aenter__(self) -> _DummyResponseWithErrors:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:  # type: ignore[override]

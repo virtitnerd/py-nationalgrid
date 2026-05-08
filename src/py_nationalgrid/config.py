@@ -1,10 +1,8 @@
 """Configuration utilities for the National Grid GraphQL client."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Self
 
 DEFAULT_ENDPOINT = "https://myaccount.nationalgrid.com/api/user-cu-uwp-gql"
 DEFAULT_TIMEOUT = 30.0
@@ -64,6 +62,6 @@ class NationalGridConfig:
             headers.update(extra_headers)
         return headers
 
-    def with_overrides(self, **overrides: Any) -> NationalGridConfig:
+    def with_overrides(self, **overrides: Any) -> Self:
         """Return a cloned config with updated fields."""
         return replace(self, **overrides)

@@ -1,7 +1,5 @@
 """Example that fetches energy usage costs and historical usage data."""
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import json

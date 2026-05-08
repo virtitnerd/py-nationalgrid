@@ -1,7 +1,5 @@
 """Example that fetches real-time meter interval reads."""
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import json

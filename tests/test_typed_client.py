@@ -1,8 +1,7 @@
 """Tests for typed convenience methods on NationalGridClient."""
 
-from __future__ import annotations
-
 from datetime import date
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -12,7 +11,7 @@ from py_nationalgrid.client import NationalGridClient
 from py_nationalgrid.config import NationalGridConfig
 from py_nationalgrid.exceptions import DataExtractionError, GraphQLError, RetryExhaustedError
 from py_nationalgrid.graphql import GraphQLResponse
-from py_nationalgrid.queries import ENERGY_USAGE_ENDPOINT
+from py_nationalgrid.queries import BILL_ENDPOINT, ENERGY_USAGE_ENDPOINT
 
 
 class _DummyResponse:
@@ -21,7 +20,7 @@ class _DummyResponse:
     def __init__(self, payload: dict[str, object]):
         self._payload = payload
 
-    async def __aenter__(self) -> _DummyResponse:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:  # type: ignore[override]
@@ -60,8 +59,16 @@ async def test_get_linked_accounts_returns_typed_list(
                     "accountLinks": {
                         "totalCount": 2,
                         "nodes": [
-                            {"accountLinkId": "link-1", "billingAccountId": "acct-001"},
-                            {"accountLinkId": "link-2", "billingAccountId": "acct-002"},
+                            {
+                                "accountLinkId": "link-1",
+                                "billingAccountId": "acct-001",
+                                "billingAccount": {"nextSchedReadingDate": "2026-06-15"},
+                            },
+                            {
+                                "accountLinkId": "link-2",
+                                "billingAccountId": "acct-002",
+                                "billingAccount": {"nextSchedReadingDate": None},
+                            },
                         ],
                     }
                 }
@@ -75,7 +82,9 @@ async def test_get_linked_accounts_returns_typed_list(
     assert len(accounts) == 2
     assert accounts[0]["accountLinkId"] == "link-1"
     assert accounts[0]["billingAccountId"] == "acct-001"
+    assert accounts[0]["billingAccount"]["nextSchedReadingDate"] == "2026-06-15"
     assert accounts[1]["billingAccountId"] == "acct-002"
+    assert accounts[1]["billingAccount"]["nextSchedReadingDate"] is None
 
 
 @pytest.mark.asyncio
@@ -1216,3 +1225,81 @@ async def test_get_ami_energy_usages_raises_data_extraction_error(
             date_from="2024-03-01",
             date_to="2024-03-31",
         )
+
+
+# ---------------------------------------------------------------------------
+# get_bills
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_bills_returns_typed_list(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_bills returns a properly typed list."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "bills": {
+                    "nodes": [
+                        {
+                            "dueDate": "2026-04-25",
+                            "statementDate": "2026-04-01",
+                            "status": "UNPAID",
+                            "accountNumber": "0209976152",
+                            "totalDueAmount": 123.45,
+                            "currentChargesAmount": 110.00,
+                        },
+                        {
+                            "dueDate": "2026-03-25",
+                            "statementDate": "2026-03-01",
+                            "status": "PAID",
+                            "accountNumber": "0209976152",
+                            "totalDueAmount": 0.00,
+                            "currentChargesAmount": 98.00,
+                        },
+                    ]
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    bills = await client.get_bills("acct-001")
+
+    assert len(bills) == 2
+    assert bills[0]["statementDate"] == "2026-04-01"
+    assert bills[0]["totalDueAmount"] == 123.45
+    assert bills[0]["dueDate"] == "2026-04-25"
+    assert bills[0]["status"] == "UNPAID"
+    assert bills[1]["totalDueAmount"] == 0.00
+
+
+@pytest.mark.asyncio
+async def test_get_bills_passes_account_number_and_uses_bill_endpoint(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_bills sends accountNumber variable to the correct endpoint."""
+    mock_session.post.return_value = _DummyResponse({"data": {"bills": {"nodes": []}}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_bills("acct-007")
+
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == BILL_ENDPOINT
+    payload = kwargs["json"]
+    assert payload["variables"]["accountNumber"] == "acct-007"
+    assert payload["operationName"] == "BillList"
+
+
+@pytest.mark.asyncio
+async def test_get_bills_raises_data_extraction_error(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """DataExtractionError propagates when 'bills' field is absent."""
+    mock_session.post.return_value = _DummyResponse({"data": {}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+
+    with pytest.raises(DataExtractionError, match="Missing 'bills' field"):
+        await client.get_bills("acct-001")

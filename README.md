@@ -25,7 +25,16 @@ async def main() -> None:
     async with NationalGridClient(config=config) as client:
         accounts = await client.get_linked_accounts()
         for account in accounts:
-            print(account["billingAccountId"])
+            acct_id = account["billingAccountId"]
+            next_read = account["billingAccount"].get("nextSchedReadingDate")
+            print(f"Account: {acct_id}  next read: {next_read}")
+
+            bills = await client.get_bills(acct_id)
+            for bill in bills[:3]:
+                print(
+                    f"  {bill['statementDate']}  due {bill['dueDate']}  "
+                    f"${bill['totalDueAmount']:.2f}  {bill['status']}"
+                )
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -35,13 +44,14 @@ if __name__ == "__main__":
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get_linked_accounts()` | `list[AccountLink]` | Get linked billing account IDs |
-| `get_billing_account()` | `BillingAccount` | Get account details (region, meters, address) |
-| `get_energy_usage_costs()` | `list[EnergyUsageCost]` | Get energy costs for a billing period |
-| `get_energy_usages()` | `list[EnergyUsage]` | Get historical usage data |
-| `get_ami_energy_usages()` | `list[AmiEnergyUsage]` | **Primary AMI method.** Tries the daily `NrtDailyUsage` endpoint first (no chunking required). Falls back to `get_ami_energy_usages_15min()` automatically on GraphQL errors or 504. See below. |
-| `get_ami_energy_usages_15min()` | `list[AmiEnergyUsage]` | AMI 15-minute interval data. Call directly only when you specifically need 15-minute granularity. Auto-chunks large ranges, falls back to daily on API errors, and handles the ~45-day hot storage limit gracefully. |
-| `get_interval_reads()` | `list[IntervalRead]` | Real-time meter interval reads. Returns `[]` for meters with no interval data (e.g. GAS). |
+| `get_linked_accounts()` | `list[AccountLink]` | Linked billing account IDs and next scheduled meter read date |
+| `get_billing_account(account_number)` | `BillingAccount` | Account details: region, address, fuel types, and meter info (including smart meter flags) |
+| `get_bills(account_number)` | `list[Bill]` | Bill history, newest first — statement date, due date, charges, and status |
+| `get_energy_usage_costs(...)` | `list[EnergyUsageCost]` | Daily energy costs for a billing period |
+| `get_energy_usages(...)` | `list[EnergyUsage]` | Monthly historical usage data |
+| `get_ami_energy_usages(...)` | `list[AmiEnergyUsage]` | **Primary AMI method.** Tries the daily `NrtDailyUsage` endpoint first (no chunking required). Falls back to `get_ami_energy_usages_15min()` automatically on GraphQL errors or 504. See below. |
+| `get_ami_energy_usages_15min(...)` | `list[AmiEnergyUsage]` | AMI 15-minute interval data. Call directly only when you specifically need 15-minute granularity. Auto-chunks large ranges, falls back to daily on API errors, and handles the ~45-day hot storage limit gracefully. |
+| `get_interval_reads(...)` | `list[IntervalRead]` | Real-time meter interval reads. Returns `[]` for meters with no interval data (e.g. GAS). |
 
 All methods return typed results using TypedDict models.
 
@@ -128,17 +138,18 @@ usages = await client.get_ami_energy_usages_15min(
 ```bash
 uv run python examples/list-accounts.py   --username user@example.com --password secret
 uv run python examples/account-info.py    --username user@example.com --password secret
-uv run python examples/energy-usage.py   --username user@example.com --password secret
-uv run python examples/interval-reads.py --username user@example.com --password secret
-uv run python examples/ami-usage.py      --username user@example.com --password secret
-uv run python examples/ami-usage.py      --username user@example.com --password secret --fuel-type ELECTRIC
-uv run python examples/ami-usage.py      --username user@example.com --password secret --fuel-type GAS --days 30
-uv run python examples/ami-usage.py      --username user@example.com --password secret --15min
+uv run python examples/billing-info.py    --username user@example.com --password secret
+uv run python examples/energy-usage.py    --username user@example.com --password secret
+uv run python examples/interval-reads.py  --username user@example.com --password secret
+uv run python examples/ami-usage.py       --username user@example.com --password secret
+uv run python examples/ami-usage.py       --username user@example.com --password secret --fuel-type ELECTRIC
+uv run python examples/ami-usage.py       --username user@example.com --password secret --fuel-type GAS --days 30
+uv run python examples/ami-usage.py       --username user@example.com --password secret --15min
 ```
 
 ## Development
 
-Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync                # install dependencies

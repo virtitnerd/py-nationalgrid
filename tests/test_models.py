@@ -1,7 +1,5 @@
 """Tests for TypedDict models and extraction helpers."""
 
-from __future__ import annotations
-
 import pytest
 
 from py_nationalgrid.exceptions import DataExtractionError

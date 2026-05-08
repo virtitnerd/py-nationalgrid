@@ -1,7 +1,5 @@
 """Example that fetches billing account information for the primary account."""
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import json
@@ -46,16 +44,29 @@ async def main() -> None:
 
             # Use the first (primary) billing account
             billing_account_id = accounts[0]["billingAccountId"]
+            next_read = accounts[0]["billingAccount"].get("nextSchedReadingDate")
             print(f"Found {len(accounts)} linked account(s).")
             print(f"Primary billing account ID: {billing_account_id}")
+            if next_read:
+                print(f"Next scheduled meter read: {next_read}")
             print()
 
-            # Now fetch detailed information for the primary account
+            # Billing account info (billingaccount-cu-uwp-gql)
             print("Fetching billing account information...")
             billing_account = await client.get_billing_account(billing_account_id)
-
             print("Billing Account Information:")
             pretty_print(billing_account)
+            print()
+
+            # Smart meter info is included in billing account data
+            meters = billing_account["meter"]["nodes"]
+            for meter in meters:
+                smart = meter["isSmartMeter"]
+                ami = meter["hasAmiSmartMeter"]
+                print(
+                    f"  Meter {meter['meterNumber']} ({meter['fuelType']}): "
+                    f"smart={smart}, AMI={ami}"
+                )
 
 
 if __name__ == "__main__":

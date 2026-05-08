@@ -13,13 +13,11 @@ Pass --15min to use the 15-minute endpoint directly (e.g. when you specifically
 need 15-minute granularity rather than hourly/daily data).
 """
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import aiohttp
 
@@ -128,7 +126,7 @@ async def main() -> None:
 
             # Fetch AMI energy usage for the requested date range
             # API serves verified data through 00:00 UTC of the current UTC date
-            date_to = datetime.now(timezone.utc).date()
+            date_to = datetime.now(UTC).date()
             date_from = date_to - timedelta(days=args.days)
             fuel_type = meter.get("fuelType")
             fuel_type = fuel_type if isinstance(fuel_type, str) else ""

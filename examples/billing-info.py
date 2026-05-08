@@ -9,7 +9,9 @@ from py_nationalgrid.helpers import create_cookie_jar
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="List linked billing accounts")
+    parser = argparse.ArgumentParser(
+        description="Show billing info: next read date and recent bills"
+    )
     parser.add_argument("--username", required=True, help="National Grid username")
     parser.add_argument("--password", required=True, help="National Grid password")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
@@ -27,11 +29,28 @@ async def main() -> None:
     async with aiohttp.ClientSession(cookie_jar=cookie_jar) as session:
         async with NationalGridClient(config=config, session=session) as client:
             accounts = await client.get_linked_accounts()
-            print(f"Found {len(accounts)} linked billing account(s):")
+            print(f"Found {len(accounts)} linked billing account(s):\n")
+
             for account in accounts:
+                acct_id = account["billingAccountId"]
                 next_read = account["billingAccount"].get("nextSchedReadingDate")
-                suffix = f"  (next read: {next_read})" if next_read else ""
-                print(f"  - {account['billingAccountId']}{suffix}")
+                print(f"Account: {acct_id}")
+                print(f"  Next scheduled read date: {next_read or 'N/A'}")
+
+                bills = await client.get_bills(acct_id)
+                if bills:
+                    print(f"  Most recent bills (3 of {len(bills)}):")
+                    for bill in bills[:3]:
+                        print(
+                            f"    statement {bill['statementDate']}  "
+                            f"due {bill['dueDate']}  "
+                            f"charges ${bill['currentChargesAmount']:.2f}  "
+                            f"total due ${bill['totalDueAmount']:.2f}  "
+                            f"status {bill['status']}"
+                        )
+                else:
+                    print("  No bills found.")
+                print()
 
 
 if __name__ == "__main__":

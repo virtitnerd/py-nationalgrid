@@ -1,7 +1,5 @@
 """Data extraction helpers for converting raw responses to typed models."""
 
-from __future__ import annotations
-
 from typing import cast
 
 from .exceptions import DataExtractionError
@@ -9,6 +7,7 @@ from .graphql import GraphQLResponse
 from .models import (
     AccountLink,
     AmiEnergyUsage,
+    Bill,
     BillingAccount,
     EnergyUsage,
     EnergyUsageCost,
@@ -226,6 +225,47 @@ def extract_ami_energy_usages(
         )
 
     return cast(list[AmiEnergyUsage], nodes)
+
+
+def extract_bills(response: GraphQLResponse) -> list[Bill]:
+    """Extract bills from a GraphQL response.
+
+    Args:
+        response: The GraphQL response from a bill history query
+
+    Returns:
+        List of bills
+
+    Raises:
+        ValueError: If the response contains GraphQL errors
+        DataExtractionError: If the expected data path is missing
+    """
+    response.raise_on_errors()
+
+    if response.data is None:
+        raise DataExtractionError(
+            "Response data is null",
+            path="data",
+            response_data=None,
+        )
+
+    bills = response.data.get("bills")
+    if bills is None:
+        raise DataExtractionError(
+            "Missing 'bills' field in response",
+            path="data.bills",
+            response_data=response.data,
+        )
+
+    nodes = bills.get("nodes")
+    if nodes is None:
+        raise DataExtractionError(
+            "Missing 'nodes' field in bills",
+            path="data.bills.nodes",
+            response_data=response.data,
+        )
+
+    return cast(list[Bill], nodes)
 
 
 def extract_interval_reads(response: RestResponse) -> list[IntervalRead]:
