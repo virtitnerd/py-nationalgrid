@@ -1,11 +1,9 @@
 """Thin abstractions around GraphQL request and response payloads."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Any
+from typing import Any, Self
 
 
 @dataclass(slots=True)
@@ -35,7 +33,7 @@ class GraphQLResponse:
     extensions: Mapping[str, Any] | None = None
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> GraphQLResponse:
+    def from_payload(cls, payload: Mapping[str, Any]) -> Self:
         return cls(
             data=payload.get("data"),
             errors=payload.get("errors"),

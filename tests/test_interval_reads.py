@@ -1,8 +1,7 @@
 """Tests for get_interval_reads() and REST query builder."""
 
-from __future__ import annotations
-
 from datetime import datetime
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -77,7 +76,7 @@ class _DummyRestResponse:
         self.status = status
         self.headers: dict[str, str] = {}
 
-    async def __aenter__(self) -> _DummyRestResponse:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:  # type: ignore[override]

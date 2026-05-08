@@ -1,21 +1,32 @@
 """TypedDict models for National Grid API responses."""
 
-from __future__ import annotations
-
 from typing import TypedDict
 
 
 # Linked Billing Accounts (user-cu-uwp-gql)
+class AccountLinkBillingAccount(TypedDict):
+    """Billing account summary embedded in an account link.
+
+    Attributes:
+        nextSchedReadingDate: Next scheduled meter reading date (ISO string), or
+            None when no scheduled read is applicable for this account/meter type.
+    """
+
+    nextSchedReadingDate: str | None
+
+
 class AccountLink(TypedDict):
     """A linked billing account identifier.
 
     Attributes:
         accountLinkId: Unique identifier for the account link
         billingAccountId: The billing account number
+        billingAccount: Summary billing account data including next scheduled read date
     """
 
     accountLinkId: str
     billingAccountId: str
+    billingAccount: AccountLinkBillingAccount
 
 
 class AccountLinksConnection(TypedDict):
@@ -198,6 +209,27 @@ class AmiEnergyUsagesConnection(TypedDict):
     """
 
     nodes: list[AmiEnergyUsage]
+
+
+# Bills (bill-cu-uwp-gql)
+class Bill(TypedDict):
+    """A billing statement.
+
+    Attributes:
+        dueDate: Payment due date (ISO string YYYY-MM-DD)
+        statementDate: Date the bill was issued (ISO string YYYY-MM-DD)
+        status: Bill status (e.g. "PAID", "UNPAID")
+        accountNumber: Billing account number
+        totalDueAmount: Total amount due in dollars
+        currentChargesAmount: Current period charges in dollars
+    """
+
+    dueDate: str
+    statementDate: str
+    status: str
+    accountNumber: str
+    totalDueAmount: float
+    currentChargesAmount: float
 
 
 # REST: Interval Reads

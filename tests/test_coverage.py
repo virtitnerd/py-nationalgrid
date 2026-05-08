@@ -1,9 +1,7 @@
 """Tests targeting uncovered lines for 100% coverage."""
 
-from __future__ import annotations
-
-import asyncio
 import time
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -18,7 +16,11 @@ from py_nationalgrid.exceptions import (
     RestAPIError,
     RetryExhaustedError,
 )
-from py_nationalgrid.extractors import extract_ami_energy_usages, extract_interval_reads
+from py_nationalgrid.extractors import (
+    extract_ami_energy_usages,
+    extract_bills,
+    extract_interval_reads,
+)
 from py_nationalgrid.graphql import GraphQLRequest, GraphQLResponse
 from py_nationalgrid.helpers import create_cookie_jar
 from py_nationalgrid.queries import _normalize_variable_definitions
@@ -55,7 +57,7 @@ class _MockResponse:
         self._text_raises = text_raises
         self.headers: dict[str, str] = {}
 
-    async def __aenter__(self) -> _MockResponse:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:  # type: ignore[override]
@@ -163,6 +165,18 @@ def test_extract_ami_energy_usages_nodes_none() -> None:
         extract_ami_energy_usages(response)
 
 
+def test_extract_bills_data_none() -> None:
+    response = GraphQLResponse(data=None)
+    with pytest.raises(DataExtractionError, match="data is null"):
+        extract_bills(response)
+
+
+def test_extract_bills_nodes_none() -> None:
+    response = GraphQLResponse(data={"bills": {}})
+    with pytest.raises(DataExtractionError, match="nodes"):
+        extract_bills(response)
+
+
 def test_extract_interval_reads_data_none() -> None:
     response = RestResponse(status=200, headers={}, data=None)
     with pytest.raises(DataExtractionError, match="data is null"):
@@ -198,7 +212,7 @@ def test_resolve_rest_url_raises_without_base() -> None:
 def test_should_retry_asyncio_timeout() -> None:
     client = NationalGridClient(config=NationalGridConfig())
     retry_config = RetryConfig(max_attempts=3, retry_on_timeout=True)
-    assert client._should_retry(asyncio.TimeoutError(), 0, retry_config) is True
+    assert client._should_retry(TimeoutError(), 0, retry_config) is True
 
 
 def test_should_retry_graphql_error_status_in_retry_on_status() -> None:

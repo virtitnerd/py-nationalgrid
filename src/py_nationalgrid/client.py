@@ -1,14 +1,12 @@
 """Async client for National Grid GraphQL and REST endpoints."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import random
 import time
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Self
 from urllib.parse import urljoin
 
 import aiohttp
@@ -19,6 +17,7 @@ from .exceptions import GraphQLError, RestAPIError, RetryExhaustedError
 from .extractors import (
     extract_ami_energy_usages,
     extract_billing_account,
+    extract_bills,
     extract_energy_usage_costs,
     extract_energy_usages,
     extract_interval_reads,
@@ -28,6 +27,7 @@ from .graphql import GraphQLRequest, GraphQLResponse
 from .models import (
     AccountLink,
     AmiEnergyUsage,
+    Bill,
     BillingAccount,
     EnergyUsage,
     EnergyUsageCost,
@@ -37,6 +37,7 @@ from .oidchelper import LoginData
 from .queries import (
     ami_energy_usages_request,
     billing_account_info_request,
+    bills_request,
     energy_usage_costs_request,
     energy_usages_request,
     linked_billing_accounts_request,
@@ -91,7 +92,7 @@ class NationalGridClient:
     def config(self) -> NationalGridConfig:
         return self._config
 
-    async def __aenter__(self) -> NationalGridClient:
+    async def __aenter__(self) -> Self:
         await self._ensure_session()
         return self
 
@@ -618,6 +619,32 @@ class NationalGridClient:
         )
         response = await self.execute(request, headers=headers, timeout=timeout)
         return extract_billing_account(response)
+
+    async def get_bills(
+        self,
+        account_number: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> list[Bill]:
+        """Get bill history with typed response.
+
+        Args:
+            account_number: The billing account number
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            List of bills ordered newest-first
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+            ValueError: When the response contains GraphQL errors
+        """
+        request = bills_request(variables={"accountNumber": account_number})
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_bills(response)
 
     async def get_energy_usage_costs(
         self,

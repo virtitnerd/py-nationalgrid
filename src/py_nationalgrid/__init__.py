@@ -16,9 +16,11 @@ from .exceptions import (
 from .helpers import create_cookie_jar
 from .models import (
     AccountLink,
+    AccountLinkBillingAccount,
     AccountLinksConnection,
     AmiEnergyUsage,
     AmiEnergyUsagesConnection,
+    Bill,
     BillingAccount,
     CustomerInfo,
     EnergyUsage,
@@ -52,9 +54,11 @@ __all__ = [
     "InvalidAuthError",
     # TypedDict models
     "AccountLink",
+    "AccountLinkBillingAccount",
     "AccountLinksConnection",
     "AmiEnergyUsage",
     "AmiEnergyUsagesConnection",
+    "Bill",
     "BillingAccount",
     "CustomerInfo",
     "EnergyUsage",

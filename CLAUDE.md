@@ -29,6 +29,7 @@ uv run mypy src            # Type-check source code
 ```bash
 uv run python examples/list-accounts.py --username user@example.com --password secret
 uv run python examples/account-info.py --username user@example.com --password secret
+uv run python examples/billing-info.py --username user@example.com --password secret
 uv run python examples/interval-reads.py --username user@example.com --password secret
 uv run python examples/energy-usage.py --username user@example.com --password secret
 uv run python examples/ami-usage.py --username user@example.com --password secret
@@ -172,7 +173,7 @@ Chunk-ordering tests set `mock_session.post.side_effect` in **newest-chunk-first
 
 ## Key Constraints
 
-- Python 3.10+ required (uses `slots=True` and modern type hints)
+- Python 3.13+ required (matches Home Assistant minimum; uses `slots=True`, `Self`, and modern type hints without `from __future__ import annotations`)
 - `uv` is the required dependency manager (not pip or poetry)
 - All GraphQL requests require `ocp-apim-subscription-key` header (configured in config.py)
 - OIDC authentication is mandatory for production usage (username/password required)

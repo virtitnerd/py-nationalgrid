@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from py_nationalgrid.config import DEFAULT_ENDPOINT, NationalGridConfig
 
 
