@@ -1303,4 +1303,3 @@ async def test_get_bills_raises_data_extraction_error(
 
     with pytest.raises(DataExtractionError, match="Missing 'bills' field"):
         await client.get_bills("acct-001")
-
