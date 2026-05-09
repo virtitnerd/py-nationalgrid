@@ -83,9 +83,7 @@ AMI_CHUNK_DAYS_DEFAULT = 60
 AMI_CHUNK_FALLBACK_DAYS = 45
 
 
-def _build_windows(
-    d_from: date, d_to: date, chunk_days: int
-) -> list[tuple[date, date]]:
+def _build_windows(d_from: date, d_to: date, chunk_days: int) -> list[tuple[date, date]]:
     """Return (start, end) pairs newest-first for the given date range and chunk size."""
     windows: list[tuple[date, date]] = []
     chunk_start = d_from
@@ -1211,9 +1209,7 @@ class NationalGridClient:
                             AMI_CHUNK_FALLBACK_DAYS,
                         )
                         hit_cold = False
-                        for sw_from, sw_to in _build_windows(
-                            w_from, w_to, AMI_CHUNK_FALLBACK_DAYS
-                        ):
+                        for sw_from, sw_to in _build_windows(w_from, w_to, AMI_CHUNK_FALLBACK_DAYS):
                             sub_vars = {
                                 **base_vars,
                                 "dateFrom": sw_from.isoformat(),
