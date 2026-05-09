@@ -1286,6 +1286,150 @@ async def test_get_ami_energy_usages_raises_data_extraction_error(
 
 
 # ---------------------------------------------------------------------------
+# Early termination on empty chunks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_chunk_stops_iteration(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty chunk stops iteration; records from prior chunks are returned."""
+    good = GraphQLResponse(
+        data={
+            "amiEnergyUsages15Min": {
+                "nodes": [{"date": "2024-03-10", "fuelType": "ELECTRIC", "quantity": 2.0}]
+            }
+        }
+    )
+    empty = GraphQLResponse(data={"amiEnergyUsages15Min": {"nodes": []}})
+    client = NationalGridClient(config=config, session=mock_session)
+    # 3-chunk range (180 days). Newest chunk returns data; second chunk is empty → stop.
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=[good, empty]))
+
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 6, 29),  # 180 days → 3 × 60-day chunks
+        fuel_type="ELECTRIC",
+    )
+
+    assert len(usages) == 1
+    assert usages[0]["quantity"] == 2.0
+    # Third chunk was never requested — execute called exactly twice.
+    assert client.execute.call_count == 2  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_all_zero_chunk_does_not_stop_iteration(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An all-zero-quantity chunk is valid data and does NOT stop iteration."""
+    good = GraphQLResponse(
+        data={
+            "amiEnergyUsages15Min": {
+                "nodes": [{"date": "2024-03-10", "fuelType": "ELECTRIC", "quantity": 1.5}]
+            }
+        }
+    )
+    all_zero = GraphQLResponse(
+        data={
+            "amiEnergyUsages15Min": {
+                "nodes": [
+                    {"date": "2024-01-10", "fuelType": "ELECTRIC", "quantity": 0.0},
+                    {"date": "2024-01-11", "fuelType": "ELECTRIC", "quantity": 0.0},
+                ]
+            }
+        }
+    )
+    client = NationalGridClient(config=config, session=mock_session)
+    # 2-chunk range (80 days). Both chunks succeed; all-zero is kept, not discarded.
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=[good, all_zero]))
+
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 3, 20),  # 80 days → 60-day + 20-day chunks
+        fuel_type="ELECTRIC",
+    )
+
+    # Both chunks returned: 2 all-zero + 1 good = 3 records total (chronological order).
+    assert len(usages) == 3
+    assert usages[0]["quantity"] == 0.0
+    assert usages[2]["quantity"] == 1.5
+
+
+@pytest.mark.asyncio
+async def test_first_chunk_empty_returns_empty_list(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the first (newest) chunk is empty, return an empty list."""
+    empty = GraphQLResponse(data={"amiEnergyUsages15Min": {"nodes": []}})
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=[empty]))
+
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 1, 20),
+        fuel_type="ELECTRIC",
+    )
+
+    assert usages == []
+
+
+@pytest.mark.asyncio
+async def test_empty_chunk_mid_run_daily_fallback_stops_iteration(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Empty result on mid-run daily fallback stops iteration; prior data is returned."""
+    chunk0_ok = GraphQLResponse(
+        data={
+            "amiEnergyUsages15Min": {
+                "nodes": [{"date": "2024-04-15", "fuelType": "ELECTRIC", "quantity": 3.0}]
+            }
+        }
+    )
+    chunk1_errors = GraphQLResponse(
+        data={"amiEnergyUsages15Min": None},
+        errors=[{"message": "mid-run error", "extensions": {"code": "InternalError"}}],
+    )
+    # Daily fallback for chunk 1 returns empty → should stop before chunk 2.
+    chunk1_daily_empty = GraphQLResponse(data={"amiEnergyUsages": {"nodes": []}})
+    client = NationalGridClient(config=config, session=mock_session)
+    # 3-chunk range (180 days). Chunk 0 ok, chunk 1 errors → daily fallback → empty → stop.
+    monkeypatch.setattr(
+        client,
+        "execute",
+        AsyncMock(side_effect=[chunk0_ok, chunk1_errors, chunk1_daily_empty]),
+    )
+
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 6, 29),  # 180 days → 3 × 60-day chunks
+        fuel_type="ELECTRIC",
+    )
+
+    # Only the newest chunk's record survives; third chunk was never fetched.
+    assert len(usages) == 1
+    assert usages[0]["quantity"] == 3.0
+    assert client.execute.call_count == 3  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
 # get_bills
 # ---------------------------------------------------------------------------
 

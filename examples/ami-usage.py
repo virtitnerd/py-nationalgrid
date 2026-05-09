@@ -7,17 +7,21 @@ unrestricted date ranges in a single request with no chunking required.
 If NrtDailyUsage returns GraphQL errors or a 504 Gateway Timeout, the method
 automatically falls back to get_ami_energy_usages_15min(), which targets
 amiEnergyUsages15Min (NrtDailyUsage15Min) and splits the date range into
-45-day chunks automatically.
+60-day chunks automatically.
 
 Pass --15min to use the 15-minute endpoint directly (e.g. when you specifically
 need 15-minute granularity rather than hourly/daily data).
+
+Pass --all-history to request all data from 1970-01-01 using the 15-minute
+endpoint. The method will automatically stop when it reaches empty chunks,
+which indicates it has gone back past the meter's installation date.
 """
 
 import argparse
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import aiohttp
 
@@ -45,6 +49,15 @@ def parse_args() -> argparse.Namespace:
         dest="use_15min",
         action="store_true",
         help="Use the 15-minute endpoint directly (NrtDailyUsage15Min with chunking).",
+    )
+    parser.add_argument(
+        "--all-history",
+        action="store_true",
+        help=(
+            "Fetch all available history from 1970-01-01 (forces --15min). "
+            "Iteration stops automatically when empty chunks indicate the meter "
+            "installation boundary has been reached."
+        ),
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
@@ -127,7 +140,11 @@ async def main() -> None:
             # Fetch AMI energy usage for the requested date range
             # API serves verified data through 00:00 UTC of the current UTC date
             date_to = datetime.now(UTC).date()
-            date_from = date_to - timedelta(days=args.days)
+            if args.all_history:
+                args.use_15min = True
+                date_from = date(1970, 1, 1)
+            else:
+                date_from = date_to - timedelta(days=args.days)
             fuel_type = meter.get("fuelType")
             fuel_type = fuel_type if isinstance(fuel_type, str) else ""
             print(f"Fuel type: {fuel_type}")

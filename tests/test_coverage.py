@@ -8,7 +8,7 @@ import aiohttp
 import pytest
 
 from py_nationalgrid.auth import NationalGridAuth
-from py_nationalgrid.client import NationalGridClient, _is_gateway_timeout
+from py_nationalgrid.client import NationalGridClient, _chunk_is_empty, _is_gateway_timeout
 from py_nationalgrid.config import NationalGridConfig, RetryConfig
 from py_nationalgrid.exceptions import (
     DataExtractionError,
@@ -311,6 +311,20 @@ def test_is_gateway_timeout_true_for_exhausted_timeout() -> None:
         "exhausted", attempts=3, last_error=TimeoutError("connection timed out")
     )
     assert _is_gateway_timeout(err) is True
+
+
+def test_chunk_is_empty_true_for_empty_list() -> None:
+    assert _chunk_is_empty([]) is True
+
+
+def test_chunk_is_empty_false_for_records_with_any_quantity() -> None:
+    records = [{"date": "2024-01-01", "quantity": 0.0}]
+    assert _chunk_is_empty(records) is False  # type: ignore[arg-type]
+
+
+def test_chunk_is_empty_false_for_records_without_quantity_key() -> None:
+    records = [{"date": "2024-01-01"}]
+    assert _chunk_is_empty(records) is False  # type: ignore[arg-type]
 
 
 def test_config_property() -> None:
@@ -769,7 +783,9 @@ async def test_15min_fell_back_non_504_exception_propagates() -> None:
 
         if call_count == 1:
             # Chunk 3 (newest) — 15min, succeeds
-            return GraphQLResponse(data={"amiEnergyUsages15Min": {"nodes": [{"value": 1}]}})
+            return GraphQLResponse(
+                data={"amiEnergyUsages15Min": {"nodes": [{"date": "2024-06-01", "quantity": 1.0}]}}
+            )
         if call_count == 2:
             # Chunk 2 — 15min returns errors → fell_back = True, switches to daily
             return GraphQLResponse(
@@ -778,7 +794,9 @@ async def test_15min_fell_back_non_504_exception_propagates() -> None:
             )
         if call_count == 3:
             # Chunk 2 daily re-request — succeeds
-            return GraphQLResponse(data={"amiEnergyUsages": {"nodes": [{"value": 2}]}})
+            return GraphQLResponse(
+                data={"amiEnergyUsages": {"nodes": [{"date": "2024-04-01", "quantity": 2.0}]}}
+            )
         # Chunk 1 daily — raises non-504 error
         raise GraphQLError("server error", endpoint="https://x.test/graphql", status=500)
 
@@ -812,8 +830,10 @@ async def test_15min_subchunk_non_504_exception_propagates() -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            # Newest chunk (20 days) succeeds
-            return GraphQLResponse(data={"amiEnergyUsages15Min": {"nodes": []}})
+            # Newest chunk (20 days) succeeds with actual data
+            return GraphQLResponse(
+                data={"amiEnergyUsages15Min": {"nodes": [{"date": "2024-03-10", "quantity": 1.0}]}}
+            )
         if call_count == 2:
             # Oldest chunk (60 days) hits 504 → triggers sub-chunk retry
             raise err_504
@@ -832,6 +852,62 @@ async def test_15min_subchunk_non_504_exception_propagates() -> None:
             date_to=date(2024, 3, 20),  # 80 days → 60-day oldest + 20-day newest
             fuel_type="ELECTRIC",
         )
+
+
+# ---------------------------------------------------------------------------
+# client.py — get_ami_energy_usages_15min: empty chunk on fell_back daily path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_15min_fell_back_empty_chunk_stops_iteration() -> None:
+    """Empty result on a fell_back daily chunk stops iteration without error."""
+    from datetime import date
+
+    config = NationalGridConfig(endpoint="https://x.test/graphql")
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.closed = False
+    client = NationalGridClient(config=config, session=session)
+
+    call_count = 0
+
+    async def _mock_execute(request, *, headers=None, timeout=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Chunk 3 (newest) — 15min, succeeds with data
+            return GraphQLResponse(
+                data={"amiEnergyUsages15Min": {"nodes": [{"date": "2024-06-01", "quantity": 1.0}]}}
+            )
+        if call_count == 2:
+            # Chunk 2 — 15min returns errors → fell_back = True, switches to daily
+            return GraphQLResponse(
+                data={"amiEnergyUsages15Min": {"nodes": []}},
+                errors=[{"message": "error"}],
+            )
+        if call_count == 3:
+            # Chunk 2 daily re-request — returns data
+            return GraphQLResponse(
+                data={"amiEnergyUsages": {"nodes": [{"date": "2024-04-01", "quantity": 2.0}]}}
+            )
+        # Chunk 1 — fell_back=True, daily returns empty → early termination
+        return GraphQLResponse(data={"amiEnergyUsages": {"nodes": []}})
+
+    client.execute = _mock_execute  # type: ignore[method-assign]
+
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M1",
+        premise_number="P1",
+        service_point_number="SP1",
+        meter_point_number="MP1",
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 6, 28),  # 180 days → 3 × 60-day chunks
+        fuel_type="ELECTRIC",
+    )
+
+    # Two records from chunks 3 and 2; chunk 1 returned empty → stopped.
+    assert len(usages) == 2
+    assert call_count == 4
 
 
 # ---------------------------------------------------------------------------
