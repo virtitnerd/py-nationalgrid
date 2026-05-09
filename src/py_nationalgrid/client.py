@@ -83,6 +83,11 @@ AMI_CHUNK_DAYS_DEFAULT = 60
 AMI_CHUNK_FALLBACK_DAYS = 45
 
 
+def _chunk_is_empty(records: list[AmiEnergyUsage]) -> bool:
+    """Return True when a chunk has no records (pre-installation or unavailable period)."""
+    return not records
+
+
 def _build_windows(d_from: date, d_to: date, chunk_days: int) -> list[tuple[date, date]]:
     """Return (start, end) pairs newest-first for the given date range and chunk size."""
     windows: list[tuple[date, date]] = []
@@ -1185,6 +1190,18 @@ class NationalGridClient:
                         break
                     raise
                 chunk_results.append(extract_ami_energy_usages(response))
+                if _chunk_is_empty(chunk_results[-1]):
+                    chunk_results.pop()
+                    if chunk_results:
+                        logger.info(
+                            "amiEnergyUsages fallback: chunk %d/%d (%s to %s) returned no"
+                            " data — stopping (meter data boundary reached).",
+                            i + 1,
+                            len(windows),
+                            w_from,
+                            w_to,
+                        )
+                        break
                 continue
 
             request = ami_energy_usages_request(
@@ -1302,11 +1319,35 @@ class NationalGridClient:
                     request = ami_energy_usages_request(variables=variables)
                     response = await self.execute(request, headers=headers, timeout=timeout)
                     chunk_results.append(extract_ami_energy_usages(response))
+                    if _chunk_is_empty(chunk_results[-1]):
+                        chunk_results.pop()
+                        if chunk_results:
+                            logger.info(
+                                "amiEnergyUsages15Min: mid-run fallback chunk %d/%d (%s to %s)"
+                                " returned no data — stopping (meter data boundary reached).",
+                                i + 1,
+                                len(windows),
+                                w_from,
+                                w_to,
+                            )
+                            break
                     continue
 
             chunk_results.append(
                 extract_ami_energy_usages(response, root_field="amiEnergyUsages15Min")
             )
+            if _chunk_is_empty(chunk_results[-1]):
+                chunk_results.pop()
+                if chunk_results:
+                    logger.info(
+                        "amiEnergyUsages15Min: chunk %d/%d (%s to %s) returned no data"
+                        " — stopping (meter data boundary reached).",
+                        i + 1,
+                        len(windows),
+                        w_from,
+                        w_to,
+                    )
+                    break
 
         # Restore chronological order: we iterated newest-first, so reverse the
         # chunk list before flattening. Records within each chunk keep API order.
