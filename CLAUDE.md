@@ -27,14 +27,16 @@ uv run mypy src            # Type-check source code
 
 ### Running Examples
 ```bash
-uv run python examples/list-accounts.py --username user@example.com --password secret
-uv run python examples/account-info.py --username user@example.com --password secret
-uv run python examples/billing-info.py --username user@example.com --password secret
-uv run python examples/interval-reads.py --username user@example.com --password secret
-uv run python examples/energy-usage.py --username user@example.com --password secret
-uv run python examples/ami-usage.py --username user@example.com --password secret
-uv run python examples/ami-usage.py --username user@example.com --password secret --fuel-type ELECTRIC --days 45
-uv run python examples/ami-usage.py --username user@example.com --password secret --15min  # explicit 15-min endpoint
+uv run python examples/list-accounts.py     --username user@example.com --password secret
+uv run python examples/account-info.py      --username user@example.com --password secret
+uv run python examples/billing-info.py      --username user@example.com --password secret
+uv run python examples/payment-history.py   --username user@example.com --password secret
+uv run python examples/account-dashboard.py --username user@example.com --password secret
+uv run python examples/interval-reads.py    --username user@example.com --password secret
+uv run python examples/energy-usage.py      --username user@example.com --password secret
+uv run python examples/ami-usage.py         --username user@example.com --password secret
+uv run python examples/ami-usage.py         --username user@example.com --password secret --fuel-type ELECTRIC --days 45
+uv run python examples/ami-usage.py         --username user@example.com --password secret --15min
 ```
 
 ### Makefile Shortcuts
@@ -102,6 +104,14 @@ Internal helper functions like `linked_billing_accounts_request()` provide pre-c
 The public API consists of typed `get_*` methods on `NationalGridClient`:
 - `get_linked_accounts()` → `list[AccountLink]`
 - `get_billing_account()` → `BillingAccount`
+- `get_bills()` → `list[Bill]`
+- `get_payment_history()` → `list[Payment]`
+- `get_account_dashboard()` → `AccountDashboard`
+- `get_paperless_billing()` → `PaperlessBilling | None`
+- `get_balanced_billing()` → `BalancedBilling | None`
+- `get_payment_plans()` → `list[PaymentPlan]`
+- `get_collection_arrangements()` → `list[CollectionArrangement]`
+- `get_meter_reading()` → `MeterReading | None`
 - `get_energy_usage_costs()` → `list[EnergyUsageCost]`
 - `get_energy_usages()` → `list[EnergyUsage]`
 - `get_ami_energy_usages()` → `list[AmiEnergyUsage]` — **primary AMI method**; tries `NrtDailyUsage` first, falls back to `get_ami_energy_usages_15min()` on failure; see section below
@@ -116,7 +126,7 @@ This is the recommended method for AMI data. It tries `NrtDailyUsage` (the stand
 
 **Fallback triggers:**
 - `response.has_errors` is true (GraphQL-level errors in the response body)
-- 504 Gateway Timeout (`_is_gateway_timeout()` helper — wraps both bare `GraphQLError(status=504)` and `RetryExhaustedError` whose `last_error` is a 504)
+- 504 Gateway Timeout or exhausted-retry `TimeoutError` (`_is_gateway_timeout()` helper — wraps bare `GraphQLError(status=504)`, `RetryExhaustedError` whose `last_error` is a 504, and `RetryExhaustedError` whose `last_error` is a `TimeoutError`)
 
 All other exceptions propagate without fallback.
 
@@ -128,28 +138,31 @@ Call this directly when you explicitly need 15-minute granularity. It handles th
 
 #### 1. Record cap and chunking
 The `amiEnergyUsages15Min` (`NrtDailyUsage15Min`) endpoint caps responses at ~10,000 records.
-The Azure Application Gateway also enforces a backend timeout that cuts off range queries spanning more than roughly 45 days — whichever limit hits first.
+The Azure Application Gateway enforces a backend timeout on large requests; empirically, 60-day windows succeed for recent data but may time out once the request touches cold storage.
 
-The method automatically splits any date range that would exceed 45 days into chunks and concatenates results:
+The method automatically splits any date range into chunks and concatenates results:
 
 ```python
 # Constants in client.py
-AMI_CHUNK_DAYS_ELECTRIC = 45  # 96 records/day × 45 = 4,320 (well inside 10k cap)
-AMI_CHUNK_DAYS_GAS      = 45  # 24 records/day × 45 = 1,080
-AMI_CHUNK_DAYS_DEFAULT  = 45  # conservative fallback when fuel_type is unknown
+AMI_CHUNK_DAYS_ELECTRIC = 60   # 96 records/day × 60 = 5,760 (inside 10k cap)
+AMI_CHUNK_DAYS_GAS      = 60   # 24 records/day × 60 = 1,440
+AMI_CHUNK_DAYS_DEFAULT  = 60   # fallback when fuel_type is unknown
+AMI_CHUNK_FALLBACK_DAYS = 45   # retry window when a 60-day chunk times out
 ```
 
 Chunks are built oldest-to-newest and then **reversed** before iteration so that the newest chunk is always requested first. This guarantees recent data is collected before any older chunk might hit the cold-storage boundary.
 
-#### 2. Cold storage / 504 graceful truncation
-National Grid serves approximately the last 45 days from today from hot storage. Data older than that sits in cold/archive storage. Any range query into cold storage — even a single-day request — receives a 504 Gateway Timeout from the Azure Application Gateway; this is a server-side constraint with no client-side workaround.
+#### 2. Cold storage / 504 graceful truncation with two-tier retry
+National Grid serves approximately the last 45 days from today from hot storage. Data older than that sits in cold/archive storage. Any range query into cold storage receives a 504 Gateway Timeout or an exhausted-retry `TimeoutError`; this is a server-side constraint with no client-side workaround.
 
-When a chunk returns a 504, the method:
-- Detects it via `_is_gateway_timeout()` helper (checks `GraphQLError.status == 504` or `RetryExhaustedError.last_error.status == 504`)
-- Logs a `WARNING` with the chunk index, date range, and record count collected so far
-- **Stops iterating** (breaks the chunk loop) and returns whatever records were already collected from more-recent chunks
+When a 60-day chunk returns a timeout/504, the method uses a two-tier retry strategy:
 
-**Callers must not assume the returned list spans the full requested date range.** Request 180 days → receive ~45 days of records, no exception raised.
+1. **If the chunk span > `AMI_CHUNK_FALLBACK_DAYS` (45 days)**: the chunk is split into 45-day sub-chunks using `_build_windows()` and retried newest-first. A `WARNING` is logged identifying the chunk being retried.
+2. **If a sub-chunk also times out** (i.e., the data is definitively in cold storage): a `WARNING` is logged with the record count collected so far, and iteration stops. Whatever records were already collected from more-recent chunks are returned.
+
+**Callers must not assume the returned list spans the full requested date range.** Request 365 days → receive ~45 days of records, no exception raised.
+
+`_is_gateway_timeout()` detects both `GraphQLError(status=504)` and `RetryExhaustedError` whose `last_error` is a `TimeoutError` (the gateway returns a connection timeout for some chunk sizes).
 
 Note: `_should_retry()` in `client.py` short-circuits retries for `GraphQLError(status=504)` — cold-storage 504s are deterministic, so retrying wastes time. The `RetryConfig` still includes 504 in `retry_on_status` for transient gateway load on other endpoints.
 

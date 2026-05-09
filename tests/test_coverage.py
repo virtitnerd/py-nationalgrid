@@ -17,9 +17,16 @@ from py_nationalgrid.exceptions import (
     RetryExhaustedError,
 )
 from py_nationalgrid.extractors import (
+    extract_account_dashboard,
     extract_ami_energy_usages,
+    extract_balanced_billing,
     extract_bills,
+    extract_collection_arrangements,
     extract_interval_reads,
+    extract_meter_reading,
+    extract_paperless_billing,
+    extract_payment_plans,
+    extract_payments,
 )
 from py_nationalgrid.graphql import GraphQLRequest, GraphQLResponse
 from py_nationalgrid.helpers import create_cookie_jar
@@ -177,10 +184,117 @@ def test_extract_bills_nodes_none() -> None:
         extract_bills(response)
 
 
+def test_extract_payments_data_none() -> None:
+    response = GraphQLResponse(data=None)
+    with pytest.raises(DataExtractionError, match="data is null"):
+        extract_payments(response)
+
+
+def test_extract_payments_nodes_none() -> None:
+    response = GraphQLResponse(data={"payments": {}})
+    with pytest.raises(DataExtractionError, match="nodes"):
+        extract_payments(response)
+
+
 def test_extract_interval_reads_data_none() -> None:
     response = RestResponse(status=200, headers={}, data=None)
     with pytest.raises(DataExtractionError, match="data is null"):
         extract_interval_reads(response)
+
+
+def test_extract_account_dashboard_data_none() -> None:
+    response = GraphQLResponse(data=None)
+    with pytest.raises(DataExtractionError, match="data is null"):
+        extract_account_dashboard(response)
+
+
+def test_extract_account_dashboard_missing_user() -> None:
+    response = GraphQLResponse(data={})
+    with pytest.raises(DataExtractionError, match="Missing 'user' field"):
+        extract_account_dashboard(response)
+
+
+def test_extract_account_dashboard_no_account_links() -> None:
+    response = GraphQLResponse(data={"user": {"accountLinks": {"nodes": []}}})
+    with pytest.raises(DataExtractionError, match="No account links found"):
+        extract_account_dashboard(response)
+
+
+def test_extract_account_dashboard_missing_billing_account() -> None:
+    response = GraphQLResponse(
+        data={"user": {"accountLinks": {"nodes": [{"billingAccount": None}]}}}
+    )
+    with pytest.raises(DataExtractionError, match="Missing 'billingAccount' field"):
+        extract_account_dashboard(response)
+
+
+def test_extract_meter_reading_data_none() -> None:
+    response = GraphQLResponse(data=None)
+    with pytest.raises(DataExtractionError, match="data is null"):
+        extract_meter_reading(response)
+
+
+def test_extract_meter_reading_returns_none_when_absent() -> None:
+    response = GraphQLResponse(data={"meterReading": None})
+    assert extract_meter_reading(response) is None
+
+
+def test_extract_paperless_billing_data_none() -> None:
+    response = GraphQLResponse(data=None)
+    with pytest.raises(DataExtractionError, match="data is null"):
+        extract_paperless_billing(response)
+
+
+def test_extract_paperless_billing_returns_none_when_absent() -> None:
+    response = GraphQLResponse(data={"paperlessBilling": None})
+    assert extract_paperless_billing(response) is None
+
+
+def test_extract_balanced_billing_data_none() -> None:
+    response = GraphQLResponse(data=None)
+    with pytest.raises(DataExtractionError, match="data is null"):
+        extract_balanced_billing(response)
+
+
+def test_extract_balanced_billing_returns_none_when_absent() -> None:
+    response = GraphQLResponse(data={"balancedBilling": None})
+    assert extract_balanced_billing(response) is None
+
+
+def test_extract_payment_plans_data_none() -> None:
+    response = GraphQLResponse(data=None)
+    with pytest.raises(DataExtractionError, match="data is null"):
+        extract_payment_plans(response)
+
+
+def test_extract_payment_plans_missing_field() -> None:
+    response = GraphQLResponse(data={})
+    with pytest.raises(DataExtractionError, match="Missing 'paymentPlans' field"):
+        extract_payment_plans(response)
+
+
+def test_extract_payment_plans_nodes_none() -> None:
+    response = GraphQLResponse(data={"paymentPlans": {}})
+    with pytest.raises(DataExtractionError, match="nodes"):
+        extract_payment_plans(response)
+
+
+def test_extract_collection_arrangements_data_none() -> None:
+    response = GraphQLResponse(data=None)
+    with pytest.raises(DataExtractionError, match="data is null"):
+        extract_collection_arrangements(response)
+
+
+def test_extract_collection_arrangements_missing_field() -> None:
+    response = GraphQLResponse(data={})
+    with pytest.raises(DataExtractionError, match="Missing 'collectionArrangements' field"):
+        extract_collection_arrangements(response)
+
+
+def test_extract_collection_arrangements_nodes_none() -> None:
+    response = GraphQLResponse(data={"collectionArrangements": {}})
+    with pytest.raises(DataExtractionError, match="nodes"):
+        extract_collection_arrangements(response)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +304,13 @@ def test_extract_interval_reads_data_none() -> None:
 
 def test_is_gateway_timeout_returns_false_for_non_exc() -> None:
     assert _is_gateway_timeout(ValueError("nope")) is False
+
+
+def test_is_gateway_timeout_true_for_exhausted_timeout() -> None:
+    err = RetryExhaustedError(
+        "exhausted", attempts=3, last_error=TimeoutError("connection timed out")
+    )
+    assert _is_gateway_timeout(err) is True
 
 
 def test_config_property() -> None:
@@ -636,7 +757,7 @@ async def test_15min_fell_back_non_504_exception_propagates() -> None:
         service_point_number="SP1",
         meter_point_number="MP1",
         date_from=date(2024, 1, 1),
-        date_to=date(2024, 3, 31),
+        date_to=date(2024, 6, 28),  # 180 days → 3 × 60-day chunks
         fuel_type="ELECTRIC",
     )
 
@@ -665,6 +786,52 @@ async def test_15min_fell_back_non_504_exception_propagates() -> None:
 
     with pytest.raises(GraphQLError, match="server error"):
         await client.get_ami_energy_usages_15min(**common_kwargs)
+
+
+# ---------------------------------------------------------------------------
+# client.py — get_ami_energy_usages_15min: non-504 in sub-chunk retry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_15min_subchunk_non_504_exception_propagates() -> None:
+    """Non-504 error from a sub-chunk (during 60→45-day retry) propagates."""
+    from datetime import date
+
+    config = NationalGridConfig(endpoint="https://x.test/graphql")
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.closed = False
+    client = NationalGridClient(config=config, session=session)
+
+    err_504 = GraphQLError("504", endpoint="https://x.test/graphql", status=504)
+    err_500 = GraphQLError("server error", endpoint="https://x.test/graphql", status=500)
+
+    call_count = 0
+
+    async def _mock_execute(request, *, headers=None, timeout=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Newest chunk (20 days) succeeds
+            return GraphQLResponse(data={"amiEnergyUsages15Min": {"nodes": []}})
+        if call_count == 2:
+            # Oldest chunk (60 days) hits 504 → triggers sub-chunk retry
+            raise err_504
+        # First sub-chunk raises a non-504 error → should propagate
+        raise err_500
+
+    client.execute = _mock_execute  # type: ignore[method-assign]
+
+    with pytest.raises(GraphQLError, match="server error"):
+        await client.get_ami_energy_usages_15min(
+            meter_number="M1",
+            premise_number="P1",
+            service_point_number="SP1",
+            meter_point_number="MP1",
+            date_from=date(2024, 1, 1),
+            date_to=date(2024, 3, 20),  # 80 days → 60-day oldest + 20-day newest
+            fuel_type="ELECTRIC",
+        )
 
 
 # ---------------------------------------------------------------------------

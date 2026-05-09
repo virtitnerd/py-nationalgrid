@@ -232,6 +232,143 @@ class Bill(TypedDict):
     currentChargesAmount: float
 
 
+# Payments (payment-cu-uwp-gql)
+class Payment(TypedDict):
+    """A payment record.
+
+    Attributes:
+        paymentDate: Date the payment was made (ISO string), or None for pending
+        processedDate: Datetime the payment was processed (ISO 8601 with timezone)
+        amount: Payment amount in dollars
+        status: Payment status, or None if not applicable
+        type: Payment type, or None if not applicable
+        method: Payment method (e.g. "ACH_PAYMENT")
+        source: Payment source (e.g. "PAYMENT")
+        accountNumber: Billing account number
+        errorCode: Error code if the payment failed, or None
+        errorMessage: Error message if the payment failed, or None
+    """
+
+    paymentDate: str | None
+    processedDate: str | None
+    amount: float
+    status: str | None
+    type: str | None
+    method: str | None
+    source: str | None
+    accountNumber: str
+    errorCode: str | None
+    errorMessage: str | None
+
+
+# Account Dashboard (user-cu-uwp-gql)
+class PaperlessBilling(TypedDict):
+    accountNumber: str
+    status: str
+    enrolledVia: str | None
+
+
+class BalancedBilling(TypedDict):
+    status: str | None
+    billingAccountNumber: str | None
+    amountBilledToDate: float | None
+    actualUsageToDate: float | None
+    planStartDate: str | None
+    currentMonthlyPayment: float | None
+    difference: float | None
+
+
+class RecurringPayDetails(TypedDict):
+    amountType: str | None
+    amount: float | None
+    status: str | None
+    planStartDate: str | None
+    paymentType: str | None
+
+
+class DashboardScheduledPayment(TypedDict):
+    amount: float | None
+    paymentDate: str | None
+    status: str | None
+    method: str | None
+    type: str | None
+    paymentSequenceNumber: int | None
+
+
+class DashboardBill(TypedDict):
+    currentChargesAmount: float
+    totalDueAmount: float
+    statementDate: str
+    dueDate: str
+
+
+class AccountDashboard(TypedDict):
+    firstName: str | None
+    lastName: str | None
+    accountNumber: str
+    currentBalance: float
+    currentBalanceRefreshDate: str | None
+    status: str | None
+    collectionStatus: str | None
+    isCashOnly: bool | None
+    isEnrolledInPaymentPlan: bool | None
+    isEnrolledInRecurringPay: bool | None
+    paperlessBilling: PaperlessBilling | None
+    balancedBilling: BalancedBilling | None
+    recurringPayDetails: RecurringPayDetails | None
+    scheduledPayments: list[DashboardScheduledPayment]
+    recentBills: list[DashboardBill]
+
+
+# Meter Reading (submitmeterreading-cu-uwp-gql)
+class MeterReading(TypedDict):
+    meterReadingStatus: str | None
+    isEligible: bool
+    transactionDate: str | None
+    reading: int | None
+    submitMeterReadingInEligibleReason: str | None
+    errorMessage: str | None
+
+
+# Payment Plans (payplan-cu-uwp-gql)
+class PaymentPlan(TypedDict):
+    paymentAgreementStatus: str | None
+    monthlyInstallmentAmount: float | None
+    totalNumberOfInstallments: int | None
+    totalNumberOfInstallmentsRemaining: int | None
+    currentInstallmentStatus: str | None
+    finalInstallmentAmount: float | None
+    requiredDownPaymentAmount: float | None
+    downPaymentStatus: str | None
+    downPaymentDueDate: str | None
+    planSequenceNumber: int | None
+    reactivationFee: float | None
+    planCompletedDate: str | None
+
+
+# Collection Arrangements (collections-cu-uwp-gql)
+class CollectionArrangementDetail(TypedDict):
+    sequenceNumber: int | None
+    installmentAmount: float | None
+    installmentDueDate: str | None
+    installmentStatus: str | None
+
+
+class CollectionArrangementDetailsConnection(TypedDict):
+    nodes: list[CollectionArrangementDetail]
+
+
+class CollectionArrangement(TypedDict):
+    totalAmountDue: float | None
+    numberOfInstallments: int | None
+    agreementDate: str | None
+    arrangementStatus: str | None
+    statusUpdateDate: str | None
+    completedDate: str | None
+    addedOn: str | None
+    details: CollectionArrangementDetailsConnection
+
+
 # REST: Interval Reads
 class IntervalRead(TypedDict):
     """Real-time meter interval read data (15-minute intervals).

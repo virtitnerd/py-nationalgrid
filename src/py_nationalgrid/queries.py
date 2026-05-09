@@ -12,6 +12,12 @@ LINKED_BILLING_ENDPOINT = "https://myaccount.nationalgrid.com/api/user-cu-uwp-gq
 BILLING_ACCOUNT_INFO_ENDPOINT = "https://myaccount.nationalgrid.com/api/billingaccount-cu-uwp-gql"
 ENERGY_USAGE_ENDPOINT = "https://myaccount.nationalgrid.com/api/energyusage-cu-uwp-gql"
 BILL_ENDPOINT = "https://myaccount.nationalgrid.com/api/bill-cu-uwp-gql"
+PAYMENT_ENDPOINT = "https://myaccount.nationalgrid.com/api/payment-cu-uwp-gql"
+PAPERLESS_BILLING_ENDPOINT = "https://myaccount.nationalgrid.com/api/paperlessbilling-cu-uwp-gql"
+BALANCED_BILLING_ENDPOINT = "https://myaccount.nationalgrid.com/api/balancedbilling-cu-uwp-gql"
+PAYMENT_PLANS_ENDPOINT = "https://myaccount.nationalgrid.com/api/payplan-cu-uwp-gql"
+COLLECTION_ARRANGEMENTS_ENDPOINT = "https://myaccount.nationalgrid.com/api/collections-cu-uwp-gql"
+METER_READING_ENDPOINT = "https://myaccount.nationalgrid.com/api/submitmeterreading-cu-uwp-gql"
 LINKED_BILLING_SELECTION_SET = """
 accountLinks {
     totalCount
@@ -83,6 +89,139 @@ nodes {
     accountNumber
     totalDueAmount
     currentChargesAmount
+}
+"""
+PAYMENTS_SELECTION_SET = """
+nodes {
+    paymentDate
+    processedDate
+    amount
+    status
+    type
+    method
+    source
+    accountNumber
+    errorCode
+    errorMessage
+}
+"""
+ACCOUNT_DASHBOARD_SELECTION_SET = """
+firstName
+lastName
+accountLinks(where: {billingAccountId: {eq: $accountNumber}}) {
+    nodes {
+        billingAccount {
+            accountNumber
+            currentBalance
+            currentBalanceRefreshDate
+            status
+            collectionStatus
+            isCashOnly
+            isEnrolledInPaymentPlan
+            isEnrolledInRecurringPay
+            paperlessBilling {
+                accountNumber
+                status
+                enrolledVia
+            }
+            balancedBilling {
+                status
+                billingAccountNumber
+                amountBilledToDate
+                actualUsageToDate
+                planStartDate
+                currentMonthlyPayment
+                difference
+            }
+            recurringPayDetails {
+                amountType
+                amount
+                status
+                planStartDate
+                paymentType
+            }
+            scheduledPayments: payments(
+                where: {and: [
+                    {status: {in: [SCHEDULED, PROCESSING, PENDING]}},
+                    {type: {neq: ONE_TIME_PAYMENT}}
+                ]}
+            ) {
+                nodes {
+                    amount
+                    paymentDate
+                    status
+                    method
+                    type
+                    paymentSequenceNumber
+                }
+            }
+            recentBills: bills(first: 2, order: [{dueDate: DESC}]) {
+                nodes {
+                    currentChargesAmount
+                    totalDueAmount
+                    statementDate
+                    dueDate
+                }
+            }
+        }
+    }
+}
+"""
+METER_READING_SELECTION_SET = """
+meterReadingStatus
+isEligible
+transactionDate
+reading
+submitMeterReadingInEligibleReason
+errorMessage
+"""
+PAPERLESS_BILLING_SELECTION_SET = """
+accountNumber
+status
+enrolledVia
+"""
+BALANCED_BILLING_SELECTION_SET = """
+status
+billingAccountNumber
+amountBilledToDate
+actualUsageToDate
+planStartDate
+currentMonthlyPayment
+difference
+"""
+PAYMENT_PLANS_SELECTION_SET = """
+nodes {
+    paymentAgreementStatus
+    monthlyInstallmentAmount
+    totalNumberOfInstallments
+    totalNumberOfInstallmentsRemaining
+    currentInstallmentStatus
+    finalInstallmentAmount
+    requiredDownPaymentAmount
+    downPaymentStatus
+    downPaymentDueDate
+    planSequenceNumber
+    reactivationFee
+    planCompletedDate
+}
+"""
+COLLECTION_ARRANGEMENTS_SELECTION_SET = """
+nodes {
+    totalAmountDue
+    numberOfInstallments
+    agreementDate
+    arrangementStatus
+    statusUpdateDate
+    completedDate
+    addedOn
+    details {
+        nodes {
+            sequenceNumber
+            installmentAmount
+            installmentDueDate
+            installmentStatus
+        }
+    }
 }
 """
 
@@ -296,6 +435,170 @@ def bills_request(
         variable_definitions=variable_definitions,
         field_arguments=field_arguments,
         endpoint=BILL_ENDPOINT,
+    ).to_request()
+
+
+def payments_request(
+    *,
+    selection_set: str = PAYMENTS_SELECTION_SET,
+    variables: Mapping[str, Any] | None = None,
+    variable_definitions: str | Sequence[str] | None = "$accountNumber: String!",
+    field_arguments: str | None = "accountNumber: $accountNumber",
+    operation_name: str = "PaymentHistory",
+) -> GraphQLRequest:
+    """Build a payment history query.
+
+    This request targets the payment-cu-uwp-gql GraphQL endpoint.
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="payments",
+        selection_set=selection_set,
+        variables=variables,
+        variable_definitions=variable_definitions,
+        field_arguments=field_arguments,
+        endpoint=PAYMENT_ENDPOINT,
+    ).to_request()
+
+
+def account_dashboard_request(
+    *,
+    selection_set: str = ACCOUNT_DASHBOARD_SELECTION_SET,
+    variables: Mapping[str, Any] | None = None,
+    variable_definitions: str | Sequence[str] | None = (
+        "$userId: String!",
+        "$accountNumber: String!",
+    ),
+    field_arguments: str | None = "userId: $userId",
+    operation_name: str = "AccountDashboard",
+) -> GraphQLRequest:
+    """Build an account dashboard query.
+
+    This request targets the user-cu-uwp-gql GraphQL endpoint.
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="user",
+        selection_set=selection_set,
+        variables=variables,
+        variable_definitions=variable_definitions,
+        field_arguments=field_arguments,
+        endpoint=LINKED_BILLING_ENDPOINT,
+    ).to_request()
+
+
+def meter_reading_request(
+    account_number: str,
+    *,
+    selection_set: str = METER_READING_SELECTION_SET,
+    operation_name: str = "MeterReading",
+) -> GraphQLRequest:
+    """Build a meter reading query.
+
+    This request targets the submitmeterreading-cu-uwp-gql GraphQL endpoint.
+    Uses inline account number (no GraphQL variables) to avoid server-side
+    HC0011 parse errors on this endpoint.
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="meterReading",
+        selection_set=selection_set,
+        variables=None,
+        variable_definitions=None,
+        field_arguments=f'accountNumber: "{account_number}"',
+        endpoint=METER_READING_ENDPOINT,
+    ).to_request()
+
+
+def paperless_billing_request(
+    account_number: str,
+    *,
+    selection_set: str = PAPERLESS_BILLING_SELECTION_SET,
+    operation_name: str = "PaperlessBilling",
+) -> GraphQLRequest:
+    """Build a paperless billing query.
+
+    This request targets the paperlessbilling-cu-uwp-gql GraphQL endpoint.
+    Uses inline account number (no GraphQL variables) to avoid server-side
+    HC0011 parse errors on this endpoint.
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="paperlessBilling",
+        selection_set=selection_set,
+        variables=None,
+        variable_definitions=None,
+        field_arguments=f'accountNumber: "{account_number}"',
+        endpoint=PAPERLESS_BILLING_ENDPOINT,
+    ).to_request()
+
+
+def balanced_billing_request(
+    account_number: str,
+    *,
+    selection_set: str = BALANCED_BILLING_SELECTION_SET,
+    operation_name: str = "BalancedBilling",
+) -> GraphQLRequest:
+    """Build a balanced billing query.
+
+    This request targets the balancedbilling-cu-uwp-gql GraphQL endpoint.
+    Uses inline account number (no GraphQL variables) to avoid server-side
+    HC0011 parse errors on this endpoint.
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="balancedBilling",
+        selection_set=selection_set,
+        variables=None,
+        variable_definitions=None,
+        field_arguments=f'accountNumber: "{account_number}"',
+        endpoint=BALANCED_BILLING_ENDPOINT,
+    ).to_request()
+
+
+def payment_plans_request(
+    account_number: str,
+    *,
+    selection_set: str = PAYMENT_PLANS_SELECTION_SET,
+    operation_name: str = "PaymentPlans",
+) -> GraphQLRequest:
+    """Build a payment plans query.
+
+    This request targets the payplan-cu-uwp-gql GraphQL endpoint.
+    Uses inline account number (no GraphQL variables) to avoid server-side
+    HC0011 parse errors on this endpoint.
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="paymentPlans",
+        selection_set=selection_set,
+        variables=None,
+        variable_definitions=None,
+        field_arguments=f'accountNumber: "{account_number}"',
+        endpoint=PAYMENT_PLANS_ENDPOINT,
+    ).to_request()
+
+
+def collection_arrangements_request(
+    account_number: str,
+    *,
+    selection_set: str = COLLECTION_ARRANGEMENTS_SELECTION_SET,
+    operation_name: str = "CollectionArrangements",
+) -> GraphQLRequest:
+    """Build a collection arrangements query.
+
+    This request targets the collections-cu-uwp-gql GraphQL endpoint.
+    Uses inline account number (no GraphQL variables) to avoid server-side
+    HC0011 parse errors on this endpoint.
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="collectionArrangements",
+        selection_set=selection_set,
+        variables=None,
+        variable_definitions=None,
+        field_arguments=f'accountNumber: "{account_number}"',
+        endpoint=COLLECTION_ARRANGEMENTS_ENDPOINT,
     ).to_request()
 
 

@@ -15,32 +15,53 @@ from .auth import NationalGridAuth
 from .config import NationalGridConfig, RetryConfig
 from .exceptions import GraphQLError, RestAPIError, RetryExhaustedError
 from .extractors import (
+    extract_account_dashboard,
     extract_ami_energy_usages,
+    extract_balanced_billing,
     extract_billing_account,
     extract_bills,
+    extract_collection_arrangements,
     extract_energy_usage_costs,
     extract_energy_usages,
     extract_interval_reads,
     extract_linked_accounts,
+    extract_meter_reading,
+    extract_paperless_billing,
+    extract_payment_plans,
+    extract_payments,
 )
 from .graphql import GraphQLRequest, GraphQLResponse
 from .models import (
+    AccountDashboard,
     AccountLink,
     AmiEnergyUsage,
+    BalancedBilling,
     Bill,
     BillingAccount,
+    CollectionArrangement,
     EnergyUsage,
     EnergyUsageCost,
     IntervalRead,
+    MeterReading,
+    PaperlessBilling,
+    Payment,
+    PaymentPlan,
 )
 from .oidchelper import LoginData
 from .queries import (
+    account_dashboard_request,
     ami_energy_usages_request,
+    balanced_billing_request,
     billing_account_info_request,
     bills_request,
+    collection_arrangements_request,
     energy_usage_costs_request,
     energy_usages_request,
     linked_billing_accounts_request,
+    meter_reading_request,
+    paperless_billing_request,
+    payment_plans_request,
+    payments_request,
 )
 from .rest import RestResponse
 from .rest_queries import realtime_meter_info_request
@@ -51,20 +72,42 @@ logger = logging.getLogger(__name__)
 TOKEN_EXPIRY_BUFFER_SECONDS = 300
 
 # amiEnergyUsages15Min caps responses at ~10 000 records regardless of date range,
-# but the Azure Application Gateway returns 504 Gateway Timeout before that cap is
-# reached for windows larger than ~45 days on both ELECTRIC and GAS meters.
-# ELECTRIC: 96 records/day × 45 days = 4 320 records — empirically safe.
-# GAS: 24 records/day × 45 days = 1 080 records — empirically safe.
-AMI_CHUNK_DAYS_ELECTRIC = 45
-AMI_CHUNK_DAYS_GAS = 45
-# Conservative default used when fuel type is unknown.
-AMI_CHUNK_DAYS_DEFAULT = 45
+# and the Azure Application Gateway enforces a backend timeout.  Empirically the
+# gateway tolerates ~60-day windows comfortably; anything larger risks a 504.
+# If a chunk does return 504, the method automatically retries it split into
+# AMI_CHUNK_FALLBACK_DAYS-day sub-chunks before giving up.
+AMI_CHUNK_DAYS_ELECTRIC = 60
+AMI_CHUNK_DAYS_GAS = 60
+AMI_CHUNK_DAYS_DEFAULT = 60
+# Sub-chunk size used when a full-size chunk hits a 504 Gateway Timeout.
+AMI_CHUNK_FALLBACK_DAYS = 45
+
+
+def _build_windows(
+    d_from: date, d_to: date, chunk_days: int
+) -> list[tuple[date, date]]:
+    """Return (start, end) pairs newest-first for the given date range and chunk size."""
+    windows: list[tuple[date, date]] = []
+    chunk_start = d_from
+    while chunk_start <= d_to:
+        chunk_end = min(chunk_start + timedelta(days=chunk_days - 1), d_to)
+        windows.append((chunk_start, chunk_end))
+        chunk_start = chunk_end + timedelta(days=1)
+    windows.reverse()
+    return windows
 
 
 def _is_gateway_timeout(exc: Exception) -> bool:
-    """Return True when exc represents a 504 Gateway Timeout from the API."""
+    """Return True when exc is a 504 or an exhausted-retry TimeoutError.
+
+    Both signal that the requested date range is too large for the server to
+    handle in a single request; the caller should retry with smaller chunks.
+    """
     if isinstance(exc, RetryExhaustedError):
-        return isinstance(exc.last_error, GraphQLError) and exc.last_error.status == 504
+        last = exc.last_error
+        return (isinstance(last, GraphQLError) and last.status == 504) or isinstance(
+            last, TimeoutError
+        )
     if isinstance(exc, GraphQLError):
         return exc.status == 504
     return False
@@ -646,6 +689,204 @@ class NationalGridClient:
         response = await self.execute(request, headers=headers, timeout=timeout)
         return extract_bills(response)
 
+    async def get_payment_history(
+        self,
+        account_number: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> list[Payment]:
+        """Get payment history with typed response.
+
+        Args:
+            account_number: The billing account number
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            List of payments ordered by the API default (most recent first)
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+            ValueError: When the response contains GraphQL errors
+        """
+        request = payments_request(variables={"accountNumber": account_number})
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_payments(response)
+
+    async def get_account_dashboard(
+        self,
+        account_number: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> AccountDashboard:
+        """Get a comprehensive account dashboard snapshot with typed response.
+
+        Returns current balance, paperless/autopay enrollment, scheduled
+        payments, recent bills, and collection status in a single API call.
+
+        Args:
+            account_number: The billing account number
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            Account dashboard data
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+            ValueError: When the response contains GraphQL errors
+        """
+        session = await self._ensure_session()
+        await self._get_access_token(session)
+        variables: dict[str, Any] = {"accountNumber": account_number}
+        sub_value = self._login_data.get("sub")
+        if sub_value:
+            variables["userId"] = sub_value
+        request = account_dashboard_request(variables=variables)
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_account_dashboard(response)
+
+    async def get_meter_reading(
+        self,
+        account_number: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> MeterReading | None:
+        """Get meter reading eligibility and last reading with typed response.
+
+        Returns whether a self-read can be submitted, the last reading on file,
+        and the current meter reading workflow status. Returns None when the
+        account has no meter reading record (e.g. AMI smart meters that read
+        automatically).
+
+        Args:
+            account_number: The billing account number
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            Meter reading data, or None if not available for this account
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+            ValueError: When the response contains GraphQL errors
+        """
+        request = meter_reading_request(account_number)
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_meter_reading(response)
+
+    async def get_paperless_billing(
+        self,
+        account_number: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> PaperlessBilling | None:
+        """Get paperless billing enrollment status with typed response.
+
+        Args:
+            account_number: The billing account number
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            Paperless billing status, or None if not applicable for this account
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+            ValueError: When the response contains GraphQL errors
+        """
+        request = paperless_billing_request(account_number)
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_paperless_billing(response)
+
+    async def get_balanced_billing(
+        self,
+        account_number: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> BalancedBilling | None:
+        """Get balanced (budget) billing plan status with typed response.
+
+        Returns None when the account is not enrolled in a balanced billing plan.
+
+        Args:
+            account_number: The billing account number
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            Balanced billing plan data, or None if not enrolled
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+            ValueError: When the response contains GraphQL errors
+        """
+        request = balanced_billing_request(account_number)
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_balanced_billing(response)
+
+    async def get_payment_plans(
+        self,
+        account_number: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> list[PaymentPlan]:
+        """Get active payment plans with typed response.
+
+        Args:
+            account_number: The billing account number
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            List of payment plans (empty list if none active)
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+            ValueError: When the response contains GraphQL errors
+        """
+        request = payment_plans_request(account_number)
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_payment_plans(response)
+
+    async def get_collection_arrangements(
+        self,
+        account_number: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> list[CollectionArrangement]:
+        """Get collection arrangements with typed response.
+
+        Args:
+            account_number: The billing account number
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            List of collection arrangements (empty list if none active)
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+            ValueError: When the response contains GraphQL errors
+        """
+        request = collection_arrangements_request(account_number)
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_collection_arrangements(response)
+
     async def get_energy_usage_costs(
         self,
         account_number: str,
@@ -846,11 +1087,15 @@ class NationalGridClient:
         fuel type, the query is automatically split into chunks and the results
         concatenated:
 
-        - ``"ELECTRIC"``: 45-day chunks (empirically safe; >45 days risks a 504)
-        - ``"GAS"`` or unknown: 45-day chunks (empirically safe below the server-side
-          504 threshold observed around 50 days)
+        - ``"ELECTRIC"``: 60-day chunks
+        - ``"GAS"`` or unknown: 60-day chunks
 
-        If ``fuel_type`` is ``None`` the conservative 45-day window is used.
+        If a chunk returns a 504 Gateway Timeout the method automatically retries
+        it split into ``AMI_CHUNK_FALLBACK_DAYS``-day (45-day) sub-chunks.  If a
+        sub-chunk also returns 504 the method stops and returns whatever records
+        were already collected.
+
+        If ``fuel_type`` is ``None`` the 60-day default is used.
         When the date range fits within a single chunk, no splitting occurs and
         the request is identical to the pre-chunking behaviour.
 
@@ -876,9 +1121,10 @@ class NationalGridClient:
             ValueError: When the response contains GraphQL errors
 
         Note:
-            504 Gateway Timeout responses are not raised. When a chunk hits cold
-            storage (data older than ~45 days from today), the method logs a warning
-            and returns whatever records were collected from more-recent chunks.
+            504 Gateway Timeout responses are not raised. When a 60-day chunk hits
+            a 504, the method retries it as 45-day sub-chunks.  If a sub-chunk also
+            returns 504 (cold-storage boundary), the method logs a warning and
+            returns whatever records were collected from more-recent chunks.
             Callers should not assume the returned list covers the full requested
             date range.
         """
@@ -892,17 +1138,9 @@ class NationalGridClient:
             else AMI_CHUNK_DAYS_GAS
         )
 
-        # Build the list of (chunk_start, chunk_end) windows, then reverse so
-        # we iterate newest-first. This guarantees that recent data (within the
-        # API's hot storage window) is always fetched before older chunks that
-        # may hit the ~45-day cold storage boundary and return a 504.
-        windows: list[tuple[date, date]] = []
-        chunk_start = d_from
-        while chunk_start <= d_to:
-            chunk_end = min(chunk_start + timedelta(days=chunk_days - 1), d_to)
-            windows.append((chunk_start, chunk_end))
-            chunk_start = chunk_end + timedelta(days=1)
-        windows.reverse()
+        # Build windows newest-first so recent (hot-storage) data is always fetched
+        # before older chunks that may hit the cold-storage 504 boundary.
+        windows = _build_windows(d_from, d_to, chunk_days)
 
         base_vars = {
             "meterNumber": meter_number,
@@ -937,9 +1175,9 @@ class NationalGridClient:
                 except (RetryExhaustedError, GraphQLError) as e:
                     if _is_gateway_timeout(e):
                         logger.warning(
-                            "amiEnergyUsages fallback: 504 on chunk %d/%d (%s to %s) — "
-                            "data is likely beyond the ~45-day accessible window. "
-                            "Returning %d record(s) collected so far.",
+                            "amiEnergyUsages fallback: request failed on chunk %d/%d "
+                            "(%s to %s) — data is likely beyond the ~45-day accessible "
+                            "window. Returning %d record(s) collected so far.",
                             i + 1,
                             len(windows),
                             w_from,
@@ -960,14 +1198,68 @@ class NationalGridClient:
                 response = await self.execute(request, headers=headers, timeout=timeout)
             except (RetryExhaustedError, GraphQLError) as e:
                 if _is_gateway_timeout(e):
+                    chunk_span = (w_to - w_from).days + 1
+                    if chunk_span > AMI_CHUNK_FALLBACK_DAYS:
+                        logger.warning(
+                            "amiEnergyUsages15Min: request failed on %d-day chunk "
+                            "%d/%d (%s to %s) — retrying as %d-day sub-chunks.",
+                            chunk_span,
+                            i + 1,
+                            len(windows),
+                            w_from,
+                            w_to,
+                            AMI_CHUNK_FALLBACK_DAYS,
+                        )
+                        hit_cold = False
+                        for sw_from, sw_to in _build_windows(
+                            w_from, w_to, AMI_CHUNK_FALLBACK_DAYS
+                        ):
+                            sub_vars = {
+                                **base_vars,
+                                "dateFrom": sw_from.isoformat(),
+                                "dateTo": sw_to.isoformat(),
+                            }
+                            sub_req = ami_energy_usages_request(
+                                variables=sub_vars,
+                                root_field="amiEnergyUsages15Min",
+                                operation_name="NrtDailyUsage15Min",
+                            )
+                            try:
+                                sub_resp = await self.execute(
+                                    sub_req, headers=headers, timeout=timeout
+                                )
+                            except (RetryExhaustedError, GraphQLError) as sub_e:
+                                if _is_gateway_timeout(sub_e):
+                                    logger.warning(
+                                        "amiEnergyUsages15Min: request failed on "
+                                        "sub-chunk (%s to %s) — data is likely "
+                                        "beyond the ~%d-day accessible window. "
+                                        "Returning %d record(s) collected so far.",
+                                        sw_from,
+                                        sw_to,
+                                        AMI_CHUNK_FALLBACK_DAYS,
+                                        sum(len(c) for c in chunk_results),
+                                    )
+                                    hit_cold = True
+                                    break
+                                raise
+                            chunk_results.append(
+                                extract_ami_energy_usages(
+                                    sub_resp, root_field="amiEnergyUsages15Min"
+                                )
+                            )
+                        if hit_cold:
+                            break
+                        continue
                     logger.warning(
-                        "amiEnergyUsages15Min: 504 on chunk %d/%d (%s to %s) — "
-                        "data is likely beyond the ~45-day accessible window. "
-                        "Returning %d record(s) collected so far.",
+                        "amiEnergyUsages15Min: request failed on chunk %d/%d "
+                        "(%s to %s) — data is likely beyond the ~%d-day accessible "
+                        "window. Returning %d record(s) collected so far.",
                         i + 1,
                         len(windows),
                         w_from,
                         w_to,
+                        AMI_CHUNK_FALLBACK_DAYS,
                         sum(len(c) for c in chunk_results),
                     )
                     break
