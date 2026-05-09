@@ -11,7 +11,16 @@ from py_nationalgrid.client import NationalGridClient
 from py_nationalgrid.config import NationalGridConfig
 from py_nationalgrid.exceptions import DataExtractionError, GraphQLError, RetryExhaustedError
 from py_nationalgrid.graphql import GraphQLResponse
-from py_nationalgrid.queries import BILL_ENDPOINT, ENERGY_USAGE_ENDPOINT
+from py_nationalgrid.queries import (
+    BALANCED_BILLING_ENDPOINT,
+    BILL_ENDPOINT,
+    COLLECTION_ARRANGEMENTS_ENDPOINT,
+    ENERGY_USAGE_ENDPOINT,
+    LINKED_BILLING_ENDPOINT,
+    METER_READING_ENDPOINT,
+    PAPERLESS_BILLING_ENDPOINT,
+    PAYMENT_PLANS_ENDPOINT,
+)
 
 
 class _DummyResponse:
@@ -518,15 +527,16 @@ async def test_no_chunking_when_range_fits_in_one_window(
 async def test_electric_chunking_splits_into_correct_windows(
     mock_session: MagicMock, config: NationalGridConfig
 ) -> None:
-    """ELECTRIC 120-day range → three 45-day chunks with correct date boundaries."""
-    # 2024-01-01 to 2024-04-29 = 120 days → 3 chunks (45 + 45 + 30)
-    # Chunks are fetched newest-first: (Mar 31–Apr 29), (Feb 15–Mar 30), (Jan 1–Feb 14)
+    """ELECTRIC 180-day range → three 60-day chunks with correct date boundaries."""
+    # 2024-01-01 to 2024-06-28 = 180 days → 3 chunks (60 + 60 + 60)
+    # Chunks built oldest-first then reversed for newest-first iteration:
+    # (Apr 30–Jun 28), (Mar 1–Apr 29), (Jan 1–Feb 29)
     mock_session.post.side_effect = [
         _DummyResponse(
-            _ami_15min_payload([{"date": "2024-04-10", "fuelType": "ELECTRIC", "quantity": 3.0}])
+            _ami_15min_payload([{"date": "2024-06-01", "fuelType": "ELECTRIC", "quantity": 3.0}])
         ),
         _DummyResponse(
-            _ami_15min_payload([{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.0}])
+            _ami_15min_payload([{"date": "2024-04-01", "fuelType": "ELECTRIC", "quantity": 2.0}])
         ),
         _DummyResponse(
             _ami_15min_payload([{"date": "2024-01-15", "fuelType": "ELECTRIC", "quantity": 1.0}])
@@ -540,7 +550,7 @@ async def test_electric_chunking_splits_into_correct_windows(
         service_point_number="SP-001",
         meter_point_number="MP-001",
         date_from=date(2024, 1, 1),
-        date_to=date(2024, 4, 29),
+        date_to=date(2024, 6, 28),
         fuel_type="ELECTRIC",
     )
 
@@ -552,31 +562,28 @@ async def test_electric_chunking_splits_into_correct_windows(
 
     # Verify chunk boundaries — newest chunk is requested first
     chunk1_vars = mock_session.post.call_args_list[0][1]["json"]["variables"]
-    assert chunk1_vars["dateFrom"] == "2024-03-31"
-    assert chunk1_vars["dateTo"] == "2024-04-29"
+    assert chunk1_vars["dateFrom"] == "2024-04-30"
+    assert chunk1_vars["dateTo"] == "2024-06-28"
 
     chunk2_vars = mock_session.post.call_args_list[1][1]["json"]["variables"]
-    assert chunk2_vars["dateFrom"] == "2024-02-15"
-    assert chunk2_vars["dateTo"] == "2024-03-30"
+    assert chunk2_vars["dateFrom"] == "2024-03-01"
+    assert chunk2_vars["dateTo"] == "2024-04-29"
 
     chunk3_vars = mock_session.post.call_args_list[2][1]["json"]["variables"]
     assert chunk3_vars["dateFrom"] == "2024-01-01"
-    assert chunk3_vars["dateTo"] == "2024-02-14"
+    assert chunk3_vars["dateTo"] == "2024-02-29"
 
 
 @pytest.mark.asyncio
-async def test_gas_chunking_uses_45_day_windows(
+async def test_gas_chunking_uses_60_day_windows(
     mock_session: MagicMock, config: NationalGridConfig
 ) -> None:
-    """GAS 91-day range → three 45-day-max chunks."""
-    # 2024-01-01 to 2024-04-01 = 92 days → 3 chunks (45 + 45 + 2)
-    # Chunks are fetched newest-first: (Mar 31–Apr 1), (Feb 15–Mar 30), (Jan 1–Feb 14)
+    """GAS uses the same 60-day chunk window as ELECTRIC."""
+    # 2024-01-01 to 2024-03-10 = 70 days → 2 chunks (60 + 10)
+    # Chunks newest-first: (Mar 1–Mar 10), (Jan 1–Feb 29)
     mock_session.post.side_effect = [
         _DummyResponse(
-            _ami_15min_payload([{"date": "2024-04-01", "fuelType": "GAS", "quantity": 3.0}])
-        ),
-        _DummyResponse(
-            _ami_15min_payload([{"date": "2024-02-25", "fuelType": "GAS", "quantity": 2.0}])
+            _ami_15min_payload([{"date": "2024-03-05", "fuelType": "GAS", "quantity": 2.0}])
         ),
         _DummyResponse(
             _ami_15min_payload([{"date": "2024-01-10", "fuelType": "GAS", "quantity": 1.0}])
@@ -590,39 +597,35 @@ async def test_gas_chunking_uses_45_day_windows(
         service_point_number="SP-001",
         meter_point_number="MP-001",
         date_from=date(2024, 1, 1),
-        date_to=date(2024, 4, 1),
+        date_to=date(2024, 3, 10),
         fuel_type="GAS",
     )
 
-    assert mock_session.post.call_count == 3
-    assert len(usages) == 3
+    assert mock_session.post.call_count == 2
+    assert len(usages) == 2
 
     # Newest chunk is requested first
     chunk1_vars = mock_session.post.call_args_list[0][1]["json"]["variables"]
-    assert chunk1_vars["dateFrom"] == "2024-03-31"
-    assert chunk1_vars["dateTo"] == "2024-04-01"
+    assert chunk1_vars["dateFrom"] == "2024-03-01"
+    assert chunk1_vars["dateTo"] == "2024-03-10"
 
     chunk2_vars = mock_session.post.call_args_list[1][1]["json"]["variables"]
-    assert chunk2_vars["dateFrom"] == "2024-02-15"
-    assert chunk2_vars["dateTo"] == "2024-03-30"
-
-    chunk3_vars = mock_session.post.call_args_list[2][1]["json"]["variables"]
-    assert chunk3_vars["dateFrom"] == "2024-01-01"
-    assert chunk3_vars["dateTo"] == "2024-02-14"
+    assert chunk2_vars["dateFrom"] == "2024-01-01"
+    assert chunk2_vars["dateTo"] == "2024-02-29"
 
 
 @pytest.mark.asyncio
-async def test_unknown_fuel_type_uses_conservative_45_day_window(
+async def test_unknown_fuel_type_uses_60_day_window(
     mock_session: MagicMock, config: NationalGridConfig
 ) -> None:
-    """fuel_type=None defaults to 45-day chunks (same as ELECTRIC and GAS)."""
-    # 50-day range → would be 1 chunk at 90 days but 2 chunks at 45 days
+    """fuel_type=None defaults to 60-day chunks."""
+    # 80-day range → 2 chunks (60 + 20); would be 1 chunk with a >80-day window
     mock_session.post.side_effect = [
         _DummyResponse(
-            _ami_15min_payload([{"date": "2024-01-15", "fuelType": "ELECTRIC", "quantity": 1.0}])
+            _ami_15min_payload([{"date": "2024-03-05", "fuelType": "ELECTRIC", "quantity": 2.0}])
         ),
         _DummyResponse(
-            _ami_15min_payload([{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.0}])
+            _ami_15min_payload([{"date": "2024-01-15", "fuelType": "ELECTRIC", "quantity": 1.0}])
         ),
     ]
 
@@ -633,7 +636,7 @@ async def test_unknown_fuel_type_uses_conservative_45_day_window(
         service_point_number="SP-001",
         meter_point_number="MP-001",
         date_from=date(2024, 1, 1),
-        date_to=date(2024, 2, 19),  # 50 days
+        date_to=date(2024, 3, 20),  # 80 days
         fuel_type=None,
     )
 
@@ -648,7 +651,7 @@ async def test_fallback_on_first_chunk_uses_full_date_range(
     """When the first chunk returns GraphQL errors, fall back to a single daily request
     covering the full original date range — no further 15min chunks attempted."""
     full_from = date(2024, 1, 1)
-    full_to = date(2024, 4, 29)  # 120-day range → would chunk if 15min worked
+    full_to = date(2024, 6, 28)  # 180-day range → would chunk if 15min worked
 
     mock_session.post.side_effect = [
         # First chunk: 15min returns errors
@@ -742,16 +745,17 @@ async def test_504_on_later_chunk_returns_partial_results(
         last_error=GraphQLError("504", endpoint="x", status=504),
     )
     client = NationalGridClient(config=config, session=mock_session)
-    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=[good, err]))
+    # 80-day range → 2 chunks: newest (20 days) ok, oldest (60 days) 504s.
+    # The 60-day chunk triggers sub-chunk retry; the first sub-chunk also 504s → stop.
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=[good, err, err]))
 
-    # 50-day range → 2 × 45-day chunks for GAS; second chunk hits 504
     usages = await client.get_ami_energy_usages_15min(
         meter_number="M-001",
         premise_number="PREM-001",
         service_point_number="SP-001",
         meter_point_number="MP-001",
         date_from=date(2024, 1, 1),
-        date_to=date(2024, 2, 19),
+        date_to=date(2024, 3, 20),  # 80 days → 60-day oldest chunk + 20-day newest
         fuel_type="GAS",
     )
     assert len(usages) == 1
@@ -763,7 +767,7 @@ async def test_15min_mid_run_fallback_switches_to_daily(
     mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When a mid-run (i>0) chunk returns errors, remaining chunks use daily endpoint."""
-    # 3-chunk range (120 days). Chunks fetched newest-first.
+    # 3-chunk range (180 days at 60-day windows). Chunks fetched newest-first.
     # Chunk 0 (newest): 15min succeeds
     # Chunk 1 (middle): 15min returns errors → switch to daily for remainder
     # Chunk 2 (oldest): daily succeeds
@@ -807,13 +811,71 @@ async def test_15min_mid_run_fallback_switches_to_daily(
         service_point_number="SP-001",
         meter_point_number="MP-001",
         date_from=date(2024, 1, 1),
-        date_to=date(2024, 4, 29),
+        date_to=date(2024, 6, 28),  # 180 days → 3 × 60-day chunks
         fuel_type="ELECTRIC",
     )
 
     # 4 execute calls: 15min(ok), 15min(err), daily(ok), daily(ok)
     assert client.execute.call_count == 4  # type: ignore[attr-defined]
     # Results in chronological order
+    assert len(usages) == 3
+    assert usages[0]["quantity"] == 1.0
+    assert usages[1]["quantity"] == 2.0
+    assert usages[2]["quantity"] == 3.0
+
+
+@pytest.mark.asyncio
+async def test_504_on_large_chunk_retries_as_subchunks(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When a 60-day chunk 504s, the method retries it split into 45-day sub-chunks."""
+    err = RetryExhaustedError(
+        "Exhausted",
+        attempts=3,
+        last_error=GraphQLError("504", endpoint="x", status=504),
+    )
+    # 80-day range → 2 main chunks: newest (20 days) ok, oldest (60 days) 504s.
+    # Sub-chunks of the 60-day chunk: newer (15 days Jan 1-Feb 14 reversed → Feb 15-Feb 29)
+    # and older (45 days Jan 1-Feb 14) — both succeed.
+    newest_ok = GraphQLResponse(
+        data={
+            "amiEnergyUsages15Min": {
+                "nodes": [{"date": "2024-03-10", "fuelType": "ELECTRIC", "quantity": 3.0}]
+            }
+        }
+    )
+    sub1_ok = GraphQLResponse(
+        data={
+            "amiEnergyUsages15Min": {
+                "nodes": [{"date": "2024-02-20", "fuelType": "ELECTRIC", "quantity": 2.0}]
+            }
+        }
+    )
+    sub2_ok = GraphQLResponse(
+        data={
+            "amiEnergyUsages15Min": {
+                "nodes": [{"date": "2024-01-10", "fuelType": "ELECTRIC", "quantity": 1.0}]
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(
+        client, "execute", AsyncMock(side_effect=[newest_ok, err, sub1_ok, sub2_ok])
+    )
+
+    usages = await client.get_ami_energy_usages_15min(
+        meter_number="M-001",
+        premise_number="PREM-001",
+        service_point_number="SP-001",
+        meter_point_number="MP-001",
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 3, 20),  # 80 days → 60-day oldest chunk + 20-day newest
+        fuel_type="ELECTRIC",
+    )
+
+    # 4 execute calls: newest(ok), oldest_60day(504), sub-chunk1(ok), sub-chunk2(ok)
+    assert client.execute.call_count == 4  # type: ignore[attr-defined]
     assert len(usages) == 3
     assert usages[0]["quantity"] == 1.0
     assert usages[1]["quantity"] == 2.0
@@ -878,8 +940,8 @@ async def test_15min_fell_back_chunk_504_stops_iteration(
     mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """After fell_back=True, a 504 on a daily chunk stops iteration gracefully."""
-    # 3-chunk range. Chunk 0 (newest) 15min ok, chunk 1 15min errors (fell_back=True),
-    # chunk 1 daily ok, chunk 2 daily 504 → stop, return collected so far.
+    # 3-chunk range (180 days at 60-day windows). Chunk 0 (newest) 15min ok,
+    # chunk 1 15min errors (fell_back=True), chunk 1 daily ok, chunk 2 daily 504 → stop.
     chunk0_15min = GraphQLResponse(
         data={
             "amiEnergyUsages15Min": {
@@ -919,7 +981,7 @@ async def test_15min_fell_back_chunk_504_stops_iteration(
         service_point_number="SP-001",
         meter_point_number="MP-001",
         date_from=date(2024, 1, 1),
-        date_to=date(2024, 4, 29),
+        date_to=date(2024, 6, 28),  # 180 days → 3 × 60-day chunks
         fuel_type="ELECTRIC",
     )
 
@@ -1162,14 +1224,11 @@ async def test_get_ami_energy_usages_fallback_triggers_chunking(
 ) -> None:
     """When daily fails, the 15-min fallback chunks a long date range automatically."""
     # First POST: daily endpoint returns errors
-    # Next 3 POSTs: 15-min chunked requests (120-day range → 3 × 45-day chunks)
+    # Next 2 POSTs: 15-min chunked requests (80-day range → 2 × 60-day chunks)
     mock_session.post.side_effect = [
         _DummyResponse({"errors": [{"message": "err"}], "data": {"amiEnergyUsages": None}}),
         _DummyResponse(
-            _ami_15min_payload([{"date": "2024-04-10", "fuelType": "ELECTRIC", "quantity": 3.0}])
-        ),
-        _DummyResponse(
-            _ami_15min_payload([{"date": "2024-03-01", "fuelType": "ELECTRIC", "quantity": 2.0}])
+            _ami_15min_payload([{"date": "2024-03-10", "fuelType": "ELECTRIC", "quantity": 2.0}])
         ),
         _DummyResponse(
             _ami_15min_payload([{"date": "2024-01-15", "fuelType": "ELECTRIC", "quantity": 1.0}])
@@ -1183,28 +1242,27 @@ async def test_get_ami_energy_usages_fallback_triggers_chunking(
         service_point_number="SP-001",
         meter_point_number="MP-001",
         date_from=date(2024, 1, 1),
-        date_to=date(2024, 4, 29),
+        date_to=date(2024, 3, 20),  # 80 days → 2 × 60-day chunks
         fuel_type="ELECTRIC",
     )
 
-    # 1 daily attempt + 3 chunked 15-min requests
-    assert mock_session.post.call_count == 4
+    # 1 daily attempt + 2 chunked 15-min requests
+    assert mock_session.post.call_count == 3
 
     # First request is the daily attempt
     daily_payload = mock_session.post.call_args_list[0][1]["json"]
     assert daily_payload["operationName"] == "NrtDailyUsage"
 
-    # Remaining 3 requests are 15-min chunks (newest-first)
+    # Remaining requests are 15-min chunks (newest-first)
     chunk1_payload = mock_session.post.call_args_list[1][1]["json"]
     assert chunk1_payload["operationName"] == "NrtDailyUsage15Min"
-    assert chunk1_payload["variables"]["dateFrom"] == "2024-03-31"
-    assert chunk1_payload["variables"]["dateTo"] == "2024-04-29"
+    assert chunk1_payload["variables"]["dateFrom"] == "2024-03-01"
+    assert chunk1_payload["variables"]["dateTo"] == "2024-03-20"
 
     # Results reassembled in chronological order
-    assert len(usages) == 3
+    assert len(usages) == 2
     assert usages[0]["quantity"] == 1.0
     assert usages[1]["quantity"] == 2.0
-    assert usages[2]["quantity"] == 3.0
 
 
 @pytest.mark.asyncio
@@ -1303,3 +1361,630 @@ async def test_get_bills_raises_data_extraction_error(
 
     with pytest.raises(DataExtractionError, match="Missing 'bills' field"):
         await client.get_bills("acct-001")
+
+
+# ---------------------------------------------------------------------------
+# get_payment_history
+# ---------------------------------------------------------------------------
+
+PAYMENT_ENDPOINT = "https://myaccount.nationalgrid.com/api/payment-cu-uwp-gql"
+
+
+@pytest.mark.asyncio
+async def test_get_payment_history_returns_typed_list(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_payment_history returns a properly typed list."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "payments": {
+                    "nodes": [
+                        {
+                            "paymentDate": None,
+                            "processedDate": "2025-09-04T22:02:41.471Z",
+                            "amount": 17.76,
+                            "status": None,
+                            "type": None,
+                            "method": "ACH_PAYMENT",
+                            "source": "PAYMENT",
+                            "accountNumber": "0209976152",
+                            "errorCode": None,
+                            "errorMessage": None,
+                        },
+                        {
+                            "paymentDate": "2025-08-01",
+                            "processedDate": "2025-08-02T10:00:00.000Z",
+                            "amount": 39.87,
+                            "status": "COMPLETED",
+                            "type": "ONE_TIME",
+                            "method": "ACH_PAYMENT",
+                            "source": "PAYMENT",
+                            "accountNumber": "0209976152",
+                            "errorCode": None,
+                            "errorMessage": None,
+                        },
+                    ]
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    payments = await client.get_payment_history("acct-001")
+
+    assert len(payments) == 2
+    assert payments[0]["processedDate"] == "2025-09-04T22:02:41.471Z"
+    assert payments[0]["amount"] == 17.76
+    assert payments[0]["method"] == "ACH_PAYMENT"
+    assert payments[0]["paymentDate"] is None
+    assert payments[1]["status"] == "COMPLETED"
+
+
+@pytest.mark.asyncio
+async def test_get_payment_history_passes_account_number_and_uses_payment_endpoint(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_payment_history sends accountNumber to the correct endpoint."""
+    mock_session.post.return_value = _DummyResponse({"data": {"payments": {"nodes": []}}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_payment_history("acct-007")
+
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == PAYMENT_ENDPOINT
+    payload = kwargs["json"]
+    assert payload["variables"]["accountNumber"] == "acct-007"
+    assert payload["operationName"] == "PaymentHistory"
+
+
+@pytest.mark.asyncio
+async def test_get_payment_history_raises_data_extraction_error(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """DataExtractionError propagates when 'payments' field is absent."""
+    mock_session.post.return_value = _DummyResponse({"data": {}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+
+    with pytest.raises(DataExtractionError, match="Missing 'payments' field"):
+        await client.get_payment_history("acct-001")
+
+
+# ---------------------------------------------------------------------------
+# get_account_dashboard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_account_dashboard_returns_typed_dict(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_account_dashboard returns properly typed data."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "user": {
+                    "firstName": "Jane",
+                    "lastName": "Doe",
+                    "accountLinks": {
+                        "nodes": [
+                            {
+                                "billingAccount": {
+                                    "accountNumber": "0209976152",
+                                    "currentBalance": 123.45,
+                                    "currentBalanceRefreshDate": "2026-05-01",
+                                    "status": "ACTIVE",
+                                    "collectionStatus": None,
+                                    "isCashOnly": False,
+                                    "isEnrolledInPaymentPlan": False,
+                                    "isEnrolledInRecurringPay": True,
+                                    "paperlessBilling": {
+                                        "accountNumber": "0209976152",
+                                        "status": "ENROLLED",
+                                        "enrolledVia": "WEB",
+                                    },
+                                    "balancedBilling": None,
+                                    "recurringPayDetails": {
+                                        "amountType": "BALANCE_DUE",
+                                        "amount": None,
+                                        "status": "ACTIVE",
+                                        "planStartDate": "2025-01-01",
+                                        "paymentType": "ACH",
+                                    },
+                                    "scheduledPayments": {
+                                        "nodes": [
+                                            {
+                                                "amount": 99.00,
+                                                "paymentDate": "2026-05-15",
+                                                "status": "SCHEDULED",
+                                                "method": "ACH_PAYMENT",
+                                                "type": "RECURRING",
+                                                "paymentSequenceNumber": 1,
+                                            }
+                                        ]
+                                    },
+                                    "recentBills": {
+                                        "nodes": [
+                                            {
+                                                "currentChargesAmount": 99.00,
+                                                "totalDueAmount": 123.45,
+                                                "statementDate": "2026-04-01",
+                                                "dueDate": "2026-04-25",
+                                            }
+                                        ]
+                                    },
+                                }
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    dashboard = await client.get_account_dashboard("0209976152")
+
+    assert dashboard["firstName"] == "Jane"
+    assert dashboard["lastName"] == "Doe"
+    assert dashboard["accountNumber"] == "0209976152"
+    assert dashboard["currentBalance"] == 123.45
+    assert dashboard["status"] == "ACTIVE"
+    assert dashboard["isEnrolledInRecurringPay"] is True
+    assert dashboard["paperlessBilling"] is not None
+    assert dashboard["paperlessBilling"]["status"] == "ENROLLED"
+    assert dashboard["balancedBilling"] is None
+    assert len(dashboard["scheduledPayments"]) == 1
+    assert dashboard["scheduledPayments"][0]["amount"] == 99.00
+    assert len(dashboard["recentBills"]) == 1
+    assert dashboard["recentBills"][0]["totalDueAmount"] == 123.45
+
+
+@pytest.mark.asyncio
+async def test_get_account_dashboard_passes_variables_and_uses_correct_endpoint(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_account_dashboard sends correct variables and hits user endpoint."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "user": {
+                    "firstName": "A",
+                    "lastName": "B",
+                    "accountLinks": {
+                        "nodes": [
+                            {
+                                "billingAccount": {
+                                    "accountNumber": "acct-001",
+                                    "currentBalance": 0.0,
+                                    "currentBalanceRefreshDate": None,
+                                    "status": None,
+                                    "collectionStatus": None,
+                                    "isCashOnly": None,
+                                    "isEnrolledInPaymentPlan": None,
+                                    "isEnrolledInRecurringPay": None,
+                                    "paperlessBilling": None,
+                                    "balancedBilling": None,
+                                    "recurringPayDetails": None,
+                                    "scheduledPayments": {"nodes": []},
+                                    "recentBills": {"nodes": []},
+                                }
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    client._login_data["sub"] = "user-sub-abc"
+    await client.get_account_dashboard("acct-001")
+
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == LINKED_BILLING_ENDPOINT
+    payload = kwargs["json"]
+    assert payload["variables"]["accountNumber"] == "acct-001"
+    assert payload["variables"]["userId"] == "user-sub-abc"
+    assert payload["operationName"] == "AccountDashboard"
+
+
+@pytest.mark.asyncio
+async def test_get_account_dashboard_raises_when_no_account_links(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """DataExtractionError raised when accountLinks.nodes is empty."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "user": {
+                    "firstName": "A",
+                    "lastName": "B",
+                    "accountLinks": {"nodes": []},
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+
+    with pytest.raises(DataExtractionError, match="No account links found"):
+        await client.get_account_dashboard("acct-001")
+
+
+# ---------------------------------------------------------------------------
+# get_meter_reading
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_meter_reading_returns_typed_dict(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_meter_reading returns typed MeterReading."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "meterReading": {
+                    "meterReadingStatus": "ELIGIBLE",
+                    "isEligible": True,
+                    "transactionDate": "2026-04-01",
+                    "reading": 12345,
+                    "submitMeterReadingInEligibleReason": None,
+                    "errorMessage": None,
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    result = await client.get_meter_reading("acct-001")
+
+    assert result is not None
+    assert result["isEligible"] is True
+    assert result["reading"] == 12345
+    assert result["meterReadingStatus"] == "ELIGIBLE"
+
+
+@pytest.mark.asyncio
+async def test_get_meter_reading_returns_none_when_absent(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """get_meter_reading returns None when meterReading field is null."""
+    mock_session.post.return_value = _DummyResponse({"data": {"meterReading": None}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    result = await client.get_meter_reading("acct-001")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_meter_reading_uses_correct_endpoint_and_no_variables(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify meter reading uses inline account number and no variables key."""
+    mock_session.post.return_value = _DummyResponse({"data": {"meterReading": None}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_meter_reading("acct-007")
+
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == METER_READING_ENDPOINT
+    payload = kwargs["json"]
+    assert "variables" not in payload
+    assert "acct-007" in payload["query"]
+    assert payload["operationName"] == "MeterReading"
+
+
+# ---------------------------------------------------------------------------
+# get_paperless_billing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_paperless_billing_returns_typed_dict(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_paperless_billing returns typed PaperlessBilling."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "paperlessBilling": {
+                    "accountNumber": "acct-001",
+                    "status": "ENROLLED",
+                    "enrolledVia": "WEB",
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    result = await client.get_paperless_billing("acct-001")
+
+    assert result is not None
+    assert result["status"] == "ENROLLED"
+    assert result["enrolledVia"] == "WEB"
+
+
+@pytest.mark.asyncio
+async def test_get_paperless_billing_returns_none_when_absent(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """get_paperless_billing returns None when field is null."""
+    mock_session.post.return_value = _DummyResponse({"data": {"paperlessBilling": None}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    result = await client.get_paperless_billing("acct-001")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_paperless_billing_uses_correct_endpoint_and_no_variables(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify paperless billing uses inline account number and no variables key."""
+    mock_session.post.return_value = _DummyResponse({"data": {"paperlessBilling": None}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_paperless_billing("acct-007")
+
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == PAPERLESS_BILLING_ENDPOINT
+    payload = kwargs["json"]
+    assert "variables" not in payload
+    assert "acct-007" in payload["query"]
+    assert payload["operationName"] == "PaperlessBilling"
+
+
+# ---------------------------------------------------------------------------
+# get_balanced_billing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_balanced_billing_returns_typed_dict(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_balanced_billing returns typed BalancedBilling."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "balancedBilling": {
+                    "status": "ACTIVE",
+                    "billingAccountNumber": "acct-001",
+                    "amountBilledToDate": 500.00,
+                    "actualUsageToDate": 480.00,
+                    "planStartDate": "2026-01-01",
+                    "currentMonthlyPayment": 100.00,
+                    "difference": 20.00,
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    result = await client.get_balanced_billing("acct-001")
+
+    assert result is not None
+    assert result["status"] == "ACTIVE"
+    assert result["currentMonthlyPayment"] == 100.00
+
+
+@pytest.mark.asyncio
+async def test_get_balanced_billing_returns_none_when_not_enrolled(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """get_balanced_billing returns None when not enrolled."""
+    mock_session.post.return_value = _DummyResponse({"data": {"balancedBilling": None}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    result = await client.get_balanced_billing("acct-001")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_balanced_billing_uses_correct_endpoint_and_no_variables(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify balanced billing uses inline account number and no variables key."""
+    mock_session.post.return_value = _DummyResponse({"data": {"balancedBilling": None}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_balanced_billing("acct-007")
+
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == BALANCED_BILLING_ENDPOINT
+    payload = kwargs["json"]
+    assert "variables" not in payload
+    assert "acct-007" in payload["query"]
+    assert payload["operationName"] == "BalancedBilling"
+
+
+# ---------------------------------------------------------------------------
+# get_payment_plans
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_payment_plans_returns_typed_list(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_payment_plans returns typed list of PaymentPlan."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "paymentPlans": {
+                    "nodes": [
+                        {
+                            "paymentAgreementStatus": "ACTIVE",
+                            "monthlyInstallmentAmount": 50.00,
+                            "totalNumberOfInstallments": 12,
+                            "totalNumberOfInstallmentsRemaining": 8,
+                            "currentInstallmentStatus": "CURRENT",
+                            "finalInstallmentAmount": 50.00,
+                            "requiredDownPaymentAmount": 0.00,
+                            "downPaymentStatus": None,
+                            "downPaymentDueDate": None,
+                            "planSequenceNumber": 1,
+                            "reactivationFee": None,
+                            "planCompletedDate": None,
+                        }
+                    ]
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    plans = await client.get_payment_plans("acct-001")
+
+    assert len(plans) == 1
+    assert plans[0]["paymentAgreementStatus"] == "ACTIVE"
+    assert plans[0]["monthlyInstallmentAmount"] == 50.00
+    assert plans[0]["totalNumberOfInstallments"] == 12
+
+
+@pytest.mark.asyncio
+async def test_get_payment_plans_returns_empty_list(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """get_payment_plans returns empty list when no plans active."""
+    mock_session.post.return_value = _DummyResponse({"data": {"paymentPlans": {"nodes": []}}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    plans = await client.get_payment_plans("acct-001")
+
+    assert plans == []
+
+
+@pytest.mark.asyncio
+async def test_get_payment_plans_uses_correct_endpoint_and_no_variables(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify payment plans uses inline account number and no variables key."""
+    mock_session.post.return_value = _DummyResponse({"data": {"paymentPlans": {"nodes": []}}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_payment_plans("acct-007")
+
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == PAYMENT_PLANS_ENDPOINT
+    payload = kwargs["json"]
+    assert "variables" not in payload
+    assert "acct-007" in payload["query"]
+    assert payload["operationName"] == "PaymentPlans"
+
+
+@pytest.mark.asyncio
+async def test_get_payment_plans_raises_data_extraction_error(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """DataExtractionError propagates when 'paymentPlans' field is absent."""
+    mock_session.post.return_value = _DummyResponse({"data": {}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+
+    with pytest.raises(DataExtractionError, match="Missing 'paymentPlans' field"):
+        await client.get_payment_plans("acct-001")
+
+
+# ---------------------------------------------------------------------------
+# get_collection_arrangements
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_collection_arrangements_returns_typed_list(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify get_collection_arrangements returns typed list."""
+    mock_session.post.return_value = _DummyResponse(
+        {
+            "data": {
+                "collectionArrangements": {
+                    "nodes": [
+                        {
+                            "totalAmountDue": 300.00,
+                            "numberOfInstallments": 3,
+                            "agreementDate": "2026-01-01",
+                            "arrangementStatus": "ACTIVE",
+                            "statusUpdateDate": "2026-01-01",
+                            "completedDate": None,
+                            "addedOn": "2026-01-01",
+                            "details": {
+                                "nodes": [
+                                    {
+                                        "sequenceNumber": 1,
+                                        "installmentAmount": 100.00,
+                                        "installmentDueDate": "2026-02-01",
+                                        "installmentStatus": "PAID",
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            }
+        }
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    arrangements = await client.get_collection_arrangements("acct-001")
+
+    assert len(arrangements) == 1
+    assert arrangements[0]["totalAmountDue"] == 300.00
+    assert arrangements[0]["arrangementStatus"] == "ACTIVE"
+    assert len(arrangements[0]["details"]["nodes"]) == 1
+    assert arrangements[0]["details"]["nodes"][0]["installmentAmount"] == 100.00
+
+
+@pytest.mark.asyncio
+async def test_get_collection_arrangements_returns_empty_list(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """get_collection_arrangements returns empty list when none active."""
+    mock_session.post.return_value = _DummyResponse(
+        {"data": {"collectionArrangements": {"nodes": []}}}
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    arrangements = await client.get_collection_arrangements("acct-001")
+
+    assert arrangements == []
+
+
+@pytest.mark.asyncio
+async def test_get_collection_arrangements_uses_correct_endpoint_and_no_variables(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Verify collection arrangements uses inline account number and no variables key."""
+    mock_session.post.return_value = _DummyResponse(
+        {"data": {"collectionArrangements": {"nodes": []}}}
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_collection_arrangements("acct-007")
+
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == COLLECTION_ARRANGEMENTS_ENDPOINT
+    payload = kwargs["json"]
+    assert "variables" not in payload
+    assert "acct-007" in payload["query"]
+    assert payload["operationName"] == "CollectionArrangements"
+
+
+@pytest.mark.asyncio
+async def test_get_collection_arrangements_raises_data_extraction_error(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """DataExtractionError propagates when 'collectionArrangements' field is absent."""
+    mock_session.post.return_value = _DummyResponse({"data": {}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+
+    with pytest.raises(DataExtractionError, match="Missing 'collectionArrangements' field"):
+        await client.get_collection_arrangements("acct-001")

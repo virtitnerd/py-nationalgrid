@@ -29,11 +29,15 @@ async def main() -> None:
             next_read = account["billingAccount"].get("nextSchedReadingDate")
             print(f"Account: {acct_id}  next read: {next_read}")
 
-            bills = await client.get_bills(acct_id)
-            for bill in bills[:3]:
+            # Single call: balance, autopay, paperless, scheduled payments, recent bills
+            dashboard = await client.get_account_dashboard(acct_id)
+            print(f"  Balance: ${dashboard['currentBalance']:.2f}")
+            print(f"  Paperless: {dashboard['paperlessBilling']['status'] if dashboard['paperlessBilling'] else 'N/A'}")
+            print(f"  Autopay: {'enrolled' if dashboard['isEnrolledInRecurringPay'] else 'not enrolled'}")
+            for bill in dashboard["recentBills"]:
                 print(
                     f"  {bill['statementDate']}  due {bill['dueDate']}  "
-                    f"${bill['totalDueAmount']:.2f}  {bill['status']}"
+                    f"${bill['totalDueAmount']:.2f}"
                 )
 
 if __name__ == "__main__":
@@ -51,6 +55,13 @@ if __name__ == "__main__":
 | `get_energy_usages(...)` | `list[EnergyUsage]` | Monthly historical usage data |
 | `get_ami_energy_usages(...)` | `list[AmiEnergyUsage]` | **Primary AMI method.** Tries the daily `NrtDailyUsage` endpoint first (no chunking required). Falls back to `get_ami_energy_usages_15min()` automatically on GraphQL errors or 504. See below. |
 | `get_ami_energy_usages_15min(...)` | `list[AmiEnergyUsage]` | AMI 15-minute interval data. Call directly only when you specifically need 15-minute granularity. Auto-chunks large ranges, falls back to daily on API errors, and handles the ~45-day hot storage limit gracefully. |
+| `get_payment_history(account_number)` | `list[Payment]` | Payment history — payment date, amount, status, method, and error info |
+| `get_account_dashboard(account_number)` | `AccountDashboard` | Account summary — balance, autopay/paperless status, scheduled payments, and recent bills in one call |
+| `get_paperless_billing(account_number)` | `PaperlessBilling \| None` | Paperless billing enrollment status |
+| `get_balanced_billing(account_number)` | `BalancedBilling \| None` | Budget billing plan status and monthly payment details |
+| `get_payment_plans(account_number)` | `list[PaymentPlan]` | Active payment plans — installment amounts, counts, and status |
+| `get_collection_arrangements(account_number)` | `list[CollectionArrangement]` | Collection arrangements — total due, installment schedule, and status |
+| `get_meter_reading(account_number)` | `MeterReading \| None` | Current meter read eligibility and last submitted reading |
 | `get_interval_reads(...)` | `list[IntervalRead]` | Real-time meter interval reads. Returns `[]` for meters with no interval data (e.g. GAS). |
 
 All methods return typed results using TypedDict models.
@@ -84,30 +95,31 @@ Use this directly only when you specifically need 15-minute interval granularity
 
 #### Chunking
 
-The National Grid API imposes a hard limit of approximately 10,000 records per response, and the Azure Application Gateway enforces a backend timeout that cuts off requests spanning more than roughly 45 days of data regardless of record count.
+The National Grid API imposes a hard limit of approximately 10,000 records per response, and the Azure Application Gateway enforces a backend timeout on large requests.
 
-To work around this, the method automatically splits any date range that exceeds 45 days into 45-day chunks and concatenates the results. Both ELECTRIC and GAS meters use 45-day chunks:
+The method automatically splits any date range that exceeds 60 days into **60-day chunks** and concatenates the results. Chunks are requested **newest-first** to ensure the most recent data is always fetched before older chunks that may hit the cold-storage boundary. Each chunk is logged at `DEBUG` level.
 
-- ELECTRIC: 96 records/day × 45 days = 4,320 records per chunk (well inside the 10k cap)
-- GAS: 24 records/day × 45 days = 1,080 records per chunk
+If a 60-day chunk returns a 504 Gateway Timeout or a request timeout, the method automatically retries that chunk split into **45-day sub-chunks** before giving up:
 
-Chunks are requested **newest-first** to ensure the most recent data is always fetched successfully before older chunks are attempted. Each chunk is logged at `DEBUG` level — enable debug logging to trace progress for large date ranges.
+```
+WARNING amiEnergyUsages15Min: request failed on 60-day chunk 4/7 (2025-11-04 to 2026-01-02) — retrying as 45-day sub-chunks.
+```
 
 #### Hot Storage Window (~45 days)
 
-National Grid's API only serves data from "hot" (immediately accessible) storage for approximately the last 45 days from today. Data older than that sits in cold/archive storage. Any query that touches cold storage — even a single-day range — will trigger a 504 Gateway Timeout from the Azure Application Gateway.
+National Grid's API only serves data from "hot" (immediately accessible) storage for approximately the last 45 days from today. Data older than that sits in cold/archive storage. Any query that touches cold storage will trigger a 504 Gateway Timeout or a request timeout.
 
 **This is a server-side constraint.** There is no client-side configuration that can change it.
 
-Because chunks are fetched newest-first, a 504 on an older chunk does not discard the recent data already collected. The method logs a warning and returns whatever records were successfully retrieved:
+Because chunks are fetched newest-first, a failure on an older chunk does not discard the recent data already collected. When a 45-day sub-chunk also times out, the method logs a warning and returns whatever records were successfully retrieved:
 
 ```
-WARNING amiEnergyUsages15Min: 504 on chunk 2/4 (2025-01-01 to 2025-02-14) —
-data is likely beyond the ~45-day accessible window. Returning 135 record(s)
+WARNING amiEnergyUsages15Min: request failed on sub-chunk (2025-09-05 to 2025-10-19) —
+data is likely beyond the ~45-day accessible window. Returning 19101 record(s)
 collected so far.
 ```
 
-**Callers should not assume the returned list covers the full requested date range.** If you request 180 days, you will receive roughly the last 45 days of records without an exception being raised.
+**Callers should not assume the returned list covers the full requested date range.** If you request 365 days, you will receive roughly the last 45 days of records without an exception being raised.
 
 #### Fallback to Daily Endpoint
 
@@ -119,7 +131,7 @@ Some meters do not support the 15-minute (`amiEnergyUsages15Min`) GraphQL operat
 from datetime import date, timedelta
 
 date_to   = date.today()
-date_from = date_to - timedelta(days=60)   # spans more than 45 days → auto-chunked
+date_from = date_to - timedelta(days=90)   # > 60 days → auto-chunked into 60-day windows
 
 usages = await client.get_ami_energy_usages_15min(
     meter_number=meter["meterNumber"],
@@ -130,18 +142,20 @@ usages = await client.get_ami_energy_usages_15min(
     date_to=date_to,
     fuel_type=meter.get("fuelType"),   # "ELECTRIC" or "GAS"; controls chunk size
 )
-# usages covers only the accessible ~45-day window even though 60 days were requested
+# usages may cover less than the full range if older data is beyond the ~45-day window
 ```
 
 ## Examples
 
 ```bash
-uv run python examples/list-accounts.py   --username user@example.com --password secret
-uv run python examples/account-info.py    --username user@example.com --password secret
-uv run python examples/billing-info.py    --username user@example.com --password secret
-uv run python examples/energy-usage.py    --username user@example.com --password secret
-uv run python examples/interval-reads.py  --username user@example.com --password secret
-uv run python examples/ami-usage.py       --username user@example.com --password secret
+uv run python examples/list-accounts.py      --username user@example.com --password secret
+uv run python examples/account-info.py       --username user@example.com --password secret
+uv run python examples/billing-info.py       --username user@example.com --password secret
+uv run python examples/payment-history.py    --username user@example.com --password secret
+uv run python examples/account-dashboard.py  --username user@example.com --password secret
+uv run python examples/energy-usage.py       --username user@example.com --password secret
+uv run python examples/interval-reads.py     --username user@example.com --password secret
+uv run python examples/ami-usage.py          --username user@example.com --password secret
 uv run python examples/ami-usage.py       --username user@example.com --password secret --fuel-type ELECTRIC
 uv run python examples/ami-usage.py       --username user@example.com --password secret --fuel-type GAS --days 30
 uv run python examples/ami-usage.py       --username user@example.com --password secret --15min
