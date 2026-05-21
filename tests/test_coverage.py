@@ -1066,3 +1066,45 @@ def test_extract_gas_bill_history_raises_on_non_list() -> None:
     response = RestResponse(status=200, headers={}, data={"error": "bad"})
     with pytest.raises(DataExtractionError, match="Expected list of gas bill records"):
         extract_gas_bill_history(response)
+
+
+def test_extract_electric_bill_history_raises_when_inner_value_not_list() -> None:
+    response = RestResponse(status=200, headers={}, data={"electricBillHistory": "bad"})
+    with pytest.raises(DataExtractionError, match="Expected list of electric bill records"):
+        extract_electric_bill_history(response)
+
+
+def test_extract_gas_bill_history_raises_when_inner_value_not_list() -> None:
+    response = RestResponse(status=200, headers={}, data={"gasBillHistory": 42})
+    with pytest.raises(DataExtractionError, match="Expected list of gas bill records"):
+        extract_gas_bill_history(response)
+
+
+# ---------------------------------------------------------------------------
+# auth.py — NationalGridBusinessAuth.async_login
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_business_auth_async_login_delegates_to_oidc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NationalGridBusinessAuth.async_login calls async_auth_oidc with prompt=none."""
+    import py_nationalgrid.auth as auth_module
+    from py_nationalgrid.auth import NationalGridBusinessAuth
+    from py_nationalgrid.oidchelper import LoginData
+
+    mock_oidc = AsyncMock(return_value=("access", "id", 3600))
+    monkeypatch.setattr(auth_module, "async_auth_oidc", mock_oidc)
+
+    business_auth = NationalGridBusinessAuth()
+    result = await business_auth.async_login(
+        session=None,
+        username="user@example.com",
+        password="secret",
+        login_data=LoginData(),
+    )
+
+    assert result == ("access", "id", 3600)
+    _, kwargs = mock_oidc.call_args
+    assert kwargs.get("extra_auth_params") == {"prompt": "none"}

@@ -2429,3 +2429,237 @@ async def test_get_gas_bill_history_returns_empty_on_204(
 
     records = await client.get_gas_bill_history("0209976152", "88144626")
     assert records == []
+
+
+# ---------------------------------------------------------------------------
+# _request_business_rest — error path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_request_business_rest_returns_response_on_success(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """_request_business_rest returns a RestResponse on a 200 OK."""
+    from py_nationalgrid.rest import RestResponse
+
+    mock_response = MagicMock()
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=False)
+    mock_response.raise_for_status = MagicMock()
+    mock_response.status = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json = AsyncMock(return_value={"electricBillHistory": []})
+    mock_session.request = MagicMock(return_value=mock_response)
+
+    client = NationalGridClient(config=config, session=mock_session)
+    result = await client._request_business_rest(
+        "POST",
+        "https://example.com/api",
+        headers={"Authorization": "Bearer tok"},
+        json={"accountNumber": "123"},
+    )
+    assert isinstance(result, RestResponse)
+    assert result.status == 200
+
+
+@pytest.mark.asyncio
+async def test_request_business_rest_raises_rest_api_error_on_non_2xx(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """_request_business_rest raises RestAPIError when the server returns 4xx/5xx."""
+    from py_nationalgrid.exceptions import RestAPIError
+
+    err = aiohttp.ClientResponseError(
+        request_info=MagicMock(), history=(), status=401, message="Unauthorized"
+    )
+
+    mock_response = MagicMock()
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=False)
+    mock_response.raise_for_status = MagicMock(side_effect=err)
+    mock_response.text = AsyncMock(return_value="Unauthorized")
+    mock_session.request = MagicMock(return_value=mock_response)
+
+    client = NationalGridClient(config=config, session=mock_session)
+    with pytest.raises(RestAPIError) as exc_info:
+        await client._request_business_rest(
+            "POST",
+            "https://example.com/api",
+            headers={"Authorization": "Bearer tok"},
+        )
+    assert exc_info.value.status == 401
+
+
+@pytest.mark.asyncio
+async def test_request_business_rest_handles_text_read_failure(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """response.text() failure in error handler sets response_text=None."""
+    from py_nationalgrid.exceptions import RestAPIError
+
+    err = aiohttp.ClientResponseError(
+        request_info=MagicMock(), history=(), status=500, message="Server Error"
+    )
+
+    mock_response = MagicMock()
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=False)
+    mock_response.raise_for_status = MagicMock(side_effect=err)
+    mock_response.text = AsyncMock(side_effect=RuntimeError("stream closed"))
+    mock_session.request = MagicMock(return_value=mock_response)
+
+    client = NationalGridClient(config=config, session=mock_session)
+    with pytest.raises(RestAPIError) as exc_info:
+        await client._request_business_rest(
+            "POST",
+            "https://example.com/api",
+            headers={"Authorization": "Bearer tok"},
+        )
+    assert exc_info.value.status == 500
+    assert exc_info.value.response_text is None
+
+
+# ---------------------------------------------------------------------------
+# _get_business_id_token — all branches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_business_id_token_returns_cached(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """Returns the cached token immediately when it hasn't expired."""
+    import time
+
+    client = NationalGridClient(config=config, session=mock_session)
+    client._business_id_token = "cached-tok"
+    client._business_token_expires_at = time.time() + 3600
+
+    result = await client._get_business_id_token()
+    assert result == "cached-tok"
+
+
+@pytest.mark.asyncio
+async def test_get_business_id_token_returns_none_without_credentials(
+    mock_session: MagicMock,
+) -> None:
+    """Returns None when no username/password are configured."""
+    cfg = NationalGridConfig()  # no username/password
+    client = NationalGridClient(config=cfg, session=mock_session)
+
+    result = await client._get_business_id_token()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_business_id_token_returns_none_on_login_exception(
+    mock_session: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Returns None (and logs error) when NationalGridBusinessAuth.async_login raises."""
+    from py_nationalgrid.auth import NationalGridBusinessAuth
+
+    cfg = NationalGridConfig(username="u", password="p")
+    client = NationalGridClient(config=cfg, session=mock_session)
+    monkeypatch.setattr(client, "_get_access_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        NationalGridBusinessAuth,
+        "async_login",
+        AsyncMock(side_effect=RuntimeError("SSO failed")),
+    )
+
+    result = await client._get_business_id_token()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_business_id_token_returns_none_when_login_returns_none(
+    mock_session: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Returns None when async_login succeeds but access_token is None."""
+    from py_nationalgrid.auth import NationalGridBusinessAuth
+
+    cfg = NationalGridConfig(username="u", password="p")
+    client = NationalGridClient(config=cfg, session=mock_session)
+    monkeypatch.setattr(client, "_get_access_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        NationalGridBusinessAuth,
+        "async_login",
+        AsyncMock(return_value=(None, None, None)),
+    )
+
+    result = await client._get_business_id_token()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_business_id_token_caches_and_returns_id_token(
+    mock_session: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Caches and returns the id_token on a successful silent SSO."""
+    from py_nationalgrid.auth import NationalGridBusinessAuth
+
+    cfg = NationalGridConfig(username="u", password="p")
+    client = NationalGridClient(config=cfg, session=mock_session)
+    monkeypatch.setattr(client, "_get_access_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        NationalGridBusinessAuth,
+        "async_login",
+        AsyncMock(return_value=("access-tok", "id-tok-123", 3600)),
+    )
+
+    result = await client._get_business_id_token()
+    assert result == "id-tok-123"
+    assert client._business_id_token == "id-tok-123"
+
+
+@pytest.mark.asyncio
+async def test_get_business_id_token_returns_none_when_id_token_missing(
+    mock_session: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Returns None when async_login returns an access token but no id_token."""
+    from py_nationalgrid.auth import NationalGridBusinessAuth
+
+    cfg = NationalGridConfig(username="u", password="p")
+    client = NationalGridClient(config=cfg, session=mock_session)
+    monkeypatch.setattr(client, "_get_access_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        NationalGridBusinessAuth,
+        "async_login",
+        AsyncMock(return_value=("access-tok", "", 3600)),
+    )
+
+    result = await client._get_business_id_token()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_business_id_token_double_checked_lock_hit(
+    mock_session: MagicMock,
+) -> None:
+    """Inner cache-check inside the lock returns early when another coroutine already
+    refreshed the token while we were waiting for the lock."""
+    import time
+
+    cfg = NationalGridConfig(username="u", password="p")
+    client = NationalGridClient(config=cfg, session=mock_session)
+
+    # Start with an expired token so the outer check fails.
+    client._business_id_token = "stale-tok"
+    client._business_token_expires_at = time.time() - 1
+
+    # Replace the lock with one that sets a fresh token on entry (simulates a
+    # concurrent coroutine having refreshed the token while we waited).
+    class _LockThatRefreshes:
+        async def __aenter__(self) -> "_LockThatRefreshes":
+            client._business_id_token = "concurrent-tok"
+            client._business_token_expires_at = time.time() + 3600
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    client._business_auth_lock = _LockThatRefreshes()  # type: ignore[assignment]
+
+    result = await client._get_business_id_token()
+    assert result == "concurrent-tok"
