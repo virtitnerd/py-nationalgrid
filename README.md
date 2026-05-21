@@ -63,6 +63,9 @@ if __name__ == "__main__":
 | `get_collection_arrangements(account_number)` | `list[CollectionArrangement]` | Collection arrangements — total due, installment schedule, and status |
 | `get_meter_reading(account_number)` | `MeterReading \| None` | Current meter read eligibility and last submitted reading |
 | `get_interval_reads(...)` | `list[IntervalRead]` | Real-time meter interval reads. Returns `[]` for meters with no interval data (e.g. GAS). |
+| `get_premise(...)` | `list[PremiseNode]` | Look up premise number and meter info by address. Does not require authentication. |
+| `get_electric_bill_history(account_number, customer_number)` | `list[ElectricBillRecord]` | Per-billing-period electric data: utility/supplier charge breakdown, total kWh, avg daily usage, and demand fields (TOU, peak kW). More detail than `get_bills()`. |
+| `get_gas_bill_history(account_number, customer_number)` | `list[GasBillRecord]` | Per-billing-period gas data: utility/supplier charge breakdown, total therms, avg daily usage. More detail than `get_bills()`. |
 
 All methods return typed results using TypedDict models.
 
@@ -145,12 +148,30 @@ usages = await client.get_ami_energy_usages_15min(
 # usages may cover less than the full range if older data is beyond the ~45-day window
 ```
 
+## Premise Lookup
+
+`get_premise()` targets the `premise-cu-uwp-gql` endpoint, which **does not require authentication**. Any address in National Grid's service territory can be queried to obtain the premise number and associated meter information:
+
+```python
+premises = await client.get_premise(
+    city="Anytown",
+    state="NY",
+    street_name="1 Example Road",
+    zip_code="12345",
+)
+for p in premises:
+    print(p["premiseNumber"], p["premiseStatus"])
+    for m in p["meter"]["nodes"]:
+        print(m["meterNumber"], m["fuelType"])
+```
+
 ## Examples
 
 ```bash
 uv run python examples/list-accounts.py      --username user@example.com --password secret
 uv run python examples/account-info.py       --username user@example.com --password secret
 uv run python examples/billing-info.py       --username user@example.com --password secret
+uv run python examples/bill-history.py       --username user@example.com --password secret
 uv run python examples/payment-history.py    --username user@example.com --password secret
 uv run python examples/account-dashboard.py  --username user@example.com --password secret
 uv run python examples/energy-usage.py       --username user@example.com --password secret
@@ -159,6 +180,9 @@ uv run python examples/ami-usage.py          --username user@example.com --passw
 uv run python examples/ami-usage.py       --username user@example.com --password secret --fuel-type ELECTRIC
 uv run python examples/ami-usage.py       --username user@example.com --password secret --fuel-type GAS --days 30
 uv run python examples/ami-usage.py       --username user@example.com --password secret --15min
+
+# Premise lookup (no auth required)
+uv run python examples/premise-lookup.py  --street "1 Example Road" --city Anytown --state NY --zip 12345
 ```
 
 ## Development

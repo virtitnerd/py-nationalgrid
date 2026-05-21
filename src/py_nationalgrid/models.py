@@ -369,6 +369,156 @@ class CollectionArrangement(TypedDict):
     details: CollectionArrangementDetailsConnection
 
 
+# Premise (premise-cu-uwp-gql)
+class PremiseMeter(TypedDict):
+    """Meter summary returned by a premise lookup.
+
+    Attributes:
+        meterNumber: Meter identifier
+        premiseNumber: Premise number this meter belongs to
+        fuelType: Fuel type served (e.g. "ELECTRIC", "GAS")
+        meterStatus: Meter status (e.g. "ACTIVE")
+    """
+
+    meterNumber: str
+    premiseNumber: str
+    fuelType: str
+    meterStatus: str
+
+
+class PremiseMeterConnection(TypedDict):
+    """Connection type for meters in a premise lookup.
+
+    Attributes:
+        nodes: List of meter summary records
+    """
+
+    nodes: list[PremiseMeter]
+
+
+class PremiseNode(TypedDict):
+    """Premise information returned by an address-based lookup.
+
+    Attributes:
+        premiseSummaryKey: Internal summary key for this premise
+        premiseNumber: Unique premise identifier
+        premiseStatus: Status of the premise (e.g. "ACTIVE")
+        isCrisAddress: Whether this is a CRIS address
+        streetNumber: Street number portion of the address
+        streetName: Street name portion of the address
+        streetAddress: Full street address
+        apartment: Apartment or unit number, if any
+        city: City
+        buildingNumber: Building number, if applicable
+        notes: Optional premise notes
+        zipcode: ZIP code
+        state: Two-letter state abbreviation
+        compressedAddress: Single-line compressed address string
+        companyCode: National Grid company code for this premise
+        region: Service region
+        meter: Meters associated with this premise
+    """
+
+    premiseSummaryKey: str | None
+    premiseNumber: str
+    premiseStatus: str | None
+    isCrisAddress: bool | None
+    streetNumber: str | None
+    streetName: str | None
+    streetAddress: str | None
+    apartment: str | None
+    city: str | None
+    buildingNumber: str | None
+    notes: str | None
+    zipcode: str | None
+    state: str | None
+    compressedAddress: str | None
+    companyCode: str | None
+    region: str | None
+    meter: PremiseMeterConnection
+
+
+# REST: Business Portal Bill History (accountservice-cu-mba-exp)
+class ElectricBillRecord(TypedDict):
+    """Per-billing-period electric meter data from the business portal.
+
+    Attributes:
+        readDate: Meter read date (ISO datetime string)
+        readDays: Number of days in this billing period
+        readType: Read type (e.g., "Actual", "Estimated")
+        totalKwh: Total kilowatt-hours billed this period
+        utilityCharges: Delivery/utility portion of charges in dollars
+        supplierCharges: Supply/commodity portion of charges in dollars
+        latePayment: Late payment fee in dollars
+        totalCharges: Total charges for this period in dollars
+        avgDailyUsage: Average daily usage in kWh
+        rkva: Reactive kilovolt-amperes (demand customers)
+        meteredPeakKw: Metered peak demand in kW
+        meteredOnPeakKw: On-peak metered demand in kW
+        billedPeakKw: Billed peak demand in kW
+        billedOnPeakKw: On-peak billed demand in kW
+        touOnPeakKwh: Time-of-use on-peak kWh
+        touOffPeakKwh: Time-of-use off-peak kWh
+        loadFactor: Load factor percentage
+        readFromDate: Start of billing period (ISO datetime string)
+        relativeMonthBillDate: First day of billing month (ISO datetime string)
+        timeStamp: Record timestamp (ISO datetime string)
+    """
+
+    readDate: str
+    readDays: int
+    readType: str
+    totalKwh: float
+    utilityCharges: float
+    supplierCharges: float
+    latePayment: float
+    totalCharges: float
+    avgDailyUsage: float
+    rkva: float
+    meteredPeakKw: float
+    meteredOnPeakKw: float
+    billedPeakKw: float
+    billedOnPeakKw: float
+    touOnPeakKwh: float
+    touOffPeakKwh: float
+    loadFactor: float
+    readFromDate: str
+    relativeMonthBillDate: str
+    timeStamp: str
+
+
+class GasBillRecord(TypedDict):
+    """Per-billing-period gas meter data from the business portal.
+
+    Attributes:
+        readDate: Meter read date (ISO datetime string)
+        readDays: Number of days in this billing period
+        readType: Read type (e.g., "Actual", "Estimated")
+        totalTherms: Total therms billed this period
+        utilityCharges: Delivery/utility portion of charges in dollars
+        supplierCharges: Supply/commodity portion of charges in dollars
+        latePayment: Late payment fee in dollars
+        totalCharges: Total charges for this period in dollars
+        avgDailyUsage: Average daily usage in therms
+        readFromDate: Start of billing period (ISO datetime string)
+        relativeMonthBillDate: First day of billing month (ISO datetime string)
+        timeStamp: Record timestamp (ISO datetime string)
+    """
+
+    readDate: str
+    readDays: int
+    readType: str
+    totalTherms: float
+    utilityCharges: float
+    supplierCharges: float
+    latePayment: float
+    totalCharges: float
+    avgDailyUsage: float
+    readFromDate: str
+    relativeMonthBillDate: str
+    timeStamp: str
+
+
 # REST: Interval Reads
 class IntervalRead(TypedDict):
     """Real-time meter interval read data (15-minute intervals).

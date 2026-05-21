@@ -106,10 +106,10 @@ async def test_execute_merges_headers(monkeypatch: pytest.MonkeyPatch) -> None:
         password: str,
         login_data: LoginData,
         timeout: float,
-    ) -> tuple[str, int]:
+    ) -> tuple[str, str, int]:
         assert username == "user@example.com"
         assert password == "super-secret"
-        return "token", 3600
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -148,8 +148,8 @@ async def test_request_rest_uses_base_url(monkeypatch: pytest.MonkeyPatch) -> No
         password: str,
         login_data: LoginData,
         timeout: float,
-    ) -> tuple[str, int]:
-        return "rest-token", 3600
+    ) -> tuple[str, str, int]:
+        return "rest-token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -184,10 +184,10 @@ async def test_execute_uses_oidc_token(monkeypatch: pytest.MonkeyPatch) -> None:
         password: str,
         login_data: LoginData,
         timeout: float,
-    ) -> tuple[str, int]:
+    ) -> tuple[str, str, int]:
         assert username == "user@example.com"
         assert password == "super-secret"
-        return "oidc-token", 3600
+        return "oidc-token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -211,8 +211,8 @@ async def test_session_uses_configured_connector(monkeypatch: pytest.MonkeyPatch
         password: str,
         login_data: LoginData,
         timeout: float,
-    ) -> tuple[str, int]:
-        return "test-token", 3600
+    ) -> tuple[str, str, int]:
+        return "test-token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 

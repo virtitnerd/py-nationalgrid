@@ -30,7 +30,7 @@ class TestRealtimeMeterInfo:
         assert "67890" in req.path_or_url
         assert req.method == "GET"
         assert req.params is not None
-        assert req.params["StartDateTime"] == "2024-03-01 00:00:00"
+        assert req.params["startDateTime"] == "2024-03-01 00:00:00"
 
     def test_to_request_merges_extra_params(self) -> None:
         info = RealtimeMeterInfo(
@@ -42,7 +42,7 @@ class TestRealtimeMeterInfo:
         req = info.to_request()
         assert req.params is not None
         assert req.params["EndDateTime"] == "2024-03-02 00:00:00"
-        assert req.params["StartDateTime"] == "2024-03-01 00:00:00"
+        assert req.params["startDateTime"] == "2024-03-01 00:00:00"
 
     def test_to_request_raises_when_start_datetime_empty(self) -> None:
         info = RealtimeMeterInfo(
@@ -58,7 +58,7 @@ class TestRealtimeMeterInfo:
             _validate_start_datetime("2024-03-01")
 
     def test_validate_start_datetime_rejects_empty(self) -> None:
-        with pytest.raises(ValueError, match="StartDateTime is required"):
+        with pytest.raises(ValueError, match="startDateTime is required"):
             _validate_start_datetime("")
 
     def test_validate_start_datetime_accepts_correct_format(self) -> None:
@@ -142,7 +142,7 @@ async def test_get_interval_reads_accepts_datetime_object(
     )
 
     _, kwargs = mock_session.request.call_args
-    assert kwargs["params"]["StartDateTime"] == "2024-03-01 06:30:00"
+    assert kwargs["params"]["startDateTime"] == "2024-03-01 06:30:00"
 
 
 @pytest.mark.asyncio

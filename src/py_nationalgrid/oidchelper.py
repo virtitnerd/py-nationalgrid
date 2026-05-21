@@ -56,7 +56,8 @@ async def async_auth_oidc(
     policy_confirm_endpoint: str,
     login_data: LoginData | None = None,
     timeout: float = 30.0,
-) -> tuple[str, int] | tuple[None, None]:
+    extra_auth_params: dict[str, str] | None = None,
+) -> tuple[str, str, int] | tuple[None, None, None]:
     """Perform the login process and return an access token with expiry time.
 
     Args:
@@ -86,7 +87,8 @@ async def async_auth_oidc(
         timeout: Request timeout in seconds for authentication requests (default: 30.0)
 
     Returns:
-        Tuple of (access_token, expires_in_seconds) on success, (None, None) on failure.
+        Tuple of (access_token, id_token, expires_in_seconds) on success,
+        (None, None, None) on failure.
     """
     # Use provided session or create one with proper SSL and cookie handling
     # Azure AD B2C requires specific cookie handling (quote_cookie=False)
@@ -123,6 +125,7 @@ async def async_auth_oidc(
             self_asserted_endpoint,
             policy_confirm_endpoint,
             timeout,
+            extra_auth_params,
         )
         if sub_value and login_data is not None:
             login_data["sub"] = sub_value
@@ -154,16 +157,16 @@ async def async_auth_oidc(
                     expires_in,
                 )
                 expires_in = 3600
-            access_token = tokens["access_token"]
+            access_token = str(tokens["access_token"])
+            id_token = str(tokens.get("id_token", ""))
 
-            # Extract sub claim from access token if login_data provided
             if login_data is not None and not login_data.get("sub"):
                 sub_value = _extract_sub_from_token(access_token)
                 if sub_value:
                     login_data["sub"] = sub_value
                     logger.debug("Extracted sub from access token: %s", sub_value)
 
-            return access_token, expires_in
+            return access_token, id_token, expires_in
         logger.error("Failed to obtain access token")
         raise CannotConnectError("Failed to obtain access token")
 
@@ -239,6 +242,44 @@ async def _get_config(
     return config
 
 
+async def _get_auth_silent(
+    session: aiohttp.ClientSession,
+    authorization_endpoint: str,
+    auth_params: dict[str, str],
+    redirect_uri: str,
+    config: ConfigDict,
+    client_id: str,
+    timeout: float,
+) -> tuple[str | None, str | None]:
+    """Handle prompt=none silent SSO by capturing the code from the Location header.
+
+    B2C responds with a 302 whose Location contains the auth code (or an error).
+    We capture Location before aiohttp follows the redirect so the code survives
+    even if the destination page strips query params.
+    """
+    timeout_obj = aiohttp.ClientTimeout(total=timeout)
+    try:
+        async with session.get(
+            authorization_endpoint,
+            params=auth_params,
+            allow_redirects=False,
+            timeout=timeout_obj,
+        ) as resp:
+            status = resp.status
+            location = str(resp.headers.get("Location", ""))
+    except aiohttp.ClientError as err:
+        raise CannotConnectError(f"Silent auth network error: {err}") from err
+
+    if status not in (301, 302, 303, 307, 308) or not location:
+        logger.warning(
+            "Silent auth: expected redirect, got status %d (location=%r)", status, location
+        )
+        return None, None
+
+    logger.debug("Silent auth redirect location: %s", location[:120])
+    return _extract_auth_result(location, redirect_uri, config, client_id)
+
+
 async def _get_auth(
     session: aiohttp.ClientSession,
     config: ConfigDict,
@@ -252,6 +293,7 @@ async def _get_auth(
     self_asserted_endpoint: str,
     policy_confirm_endpoint: str,
     timeout: float,
+    extra_auth_params: dict[str, str] | None = None,
 ) -> tuple[str | None, str | None]:
     """Get the authorization code."""
     auth_params = {
@@ -262,6 +304,21 @@ async def _get_auth(
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
     }
+    if extra_auth_params:
+        auth_params.update(extra_auth_params)
+
+    if extra_auth_params and extra_auth_params.get("prompt") == "none":
+        logger.debug("Requesting authorization code (silent SSO)")
+        return await _get_auth_silent(
+            session,
+            config["authorization_endpoint"],
+            auth_params,
+            redirect_uri,
+            config,
+            client_id,
+            timeout,
+        )
+
     logger.debug("Requesting authorization code")
     auth_content, final_url, status = await _fetch(
         session, config["authorization_endpoint"], timeout, params=auth_params

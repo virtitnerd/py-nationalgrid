@@ -9,6 +9,7 @@ from .graphql import GraphQLRequest, compose_query
 
 DEFAULT_SELECTION_SET = "__typename"
 LINKED_BILLING_ENDPOINT = "https://myaccount.nationalgrid.com/api/user-cu-uwp-gql"
+PREMISE_ENDPOINT = "https://myaccount.nationalgrid.com/api/premise-cu-uwp-gql"
 BILLING_ACCOUNT_INFO_ENDPOINT = "https://myaccount.nationalgrid.com/api/billingaccount-cu-uwp-gql"
 ENERGY_USAGE_ENDPOINT = "https://myaccount.nationalgrid.com/api/energyusage-cu-uwp-gql"
 BILL_ENDPOINT = "https://myaccount.nationalgrid.com/api/bill-cu-uwp-gql"
@@ -203,6 +204,34 @@ nodes {
     planSequenceNumber
     reactivationFee
     planCompletedDate
+}
+"""
+PREMISE_SELECTION_SET = """
+nodes {
+    premiseSummaryKey
+    premiseNumber
+    premiseStatus
+    isCrisAddress
+    streetNumber
+    streetName
+    streetAddress
+    apartment
+    city
+    buildingNumber
+    notes
+    zipcode
+    state
+    compressedAddress
+    companyCode
+    region
+    meter {
+        nodes {
+            meterNumber
+            premiseNumber
+            fuelType
+            meterStatus
+        }
+    }
 }
 """
 COLLECTION_ARRANGEMENTS_SELECTION_SET = """
@@ -599,6 +628,41 @@ def collection_arrangements_request(
         variable_definitions=None,
         field_arguments=f'accountNumber: "{account_number}"',
         endpoint=COLLECTION_ARRANGEMENTS_ENDPOINT,
+    ).to_request()
+
+
+def premise_request(
+    *,
+    selection_set: str = PREMISE_SELECTION_SET,
+    variables: Mapping[str, Any] | None = None,
+    variable_definitions: str | Sequence[str] | None = (
+        "$apartment: String",
+        "$city: String!",
+        "$state: String!",
+        "$streetName: String!",
+        "$zipCode: String!",
+        "$allowCrisAddresses: Boolean",
+    ),
+    field_arguments: str | None = (
+        "allowCrisAddresses: $allowCrisAddresses, "
+        "where: {state: {eq: $state}, city: {eq: $city}, zipcode: {eq: $zipCode}, "
+        "streetName: {eq: $streetName}, apartment: {eq: $apartment}}"
+    ),
+    operation_name: str = "Premise",
+) -> GraphQLRequest:
+    """Build a premise lookup query.
+
+    This request targets the premise-cu-uwp-gql GraphQL endpoint.
+    This endpoint does not require authentication.
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="premise",
+        selection_set=selection_set,
+        variables=variables,
+        variable_definitions=variable_definitions,
+        field_arguments=field_arguments,
+        endpoint=PREMISE_ENDPOINT,
     ).to_request()
 
 

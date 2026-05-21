@@ -68,7 +68,7 @@ async def test_retry_on_500_error(monkeypatch: pytest.MonkeyPatch):
     session.post = mock_post
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -92,7 +92,7 @@ async def test_retry_exhausted_raises_error(monkeypatch: pytest.MonkeyPatch):
     session.post.return_value = _MockResponse({}, status=500, raise_on_status=True)
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -135,7 +135,7 @@ async def test_401_clears_token_and_retries(monkeypatch: pytest.MonkeyPatch):
     async def _fake_login(self, session, username, password, login_data, timeout):
         nonlocal login_count
         login_count += 1
-        return f"token_{login_count}", 3600
+        return f"token_{login_count}", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -162,7 +162,7 @@ async def test_graphql_error_includes_context(monkeypatch: pytest.MonkeyPatch):
     session.post = mock_post
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -201,7 +201,7 @@ async def test_rest_api_error_includes_context(monkeypatch: pytest.MonkeyPatch):
     session.request = mock_request
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -239,7 +239,7 @@ async def test_no_retry_on_400_error(monkeypatch: pytest.MonkeyPatch):
     session.post = mock_post
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -272,7 +272,7 @@ async def test_retry_on_timeout(monkeypatch: pytest.MonkeyPatch):
     session.post = mock_post
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -318,7 +318,7 @@ async def test_no_retry_on_504_graphql_error(monkeypatch: pytest.MonkeyPatch):
     session.post = mock_post
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 

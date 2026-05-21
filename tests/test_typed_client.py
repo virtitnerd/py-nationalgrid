@@ -20,6 +20,7 @@ from py_nationalgrid.queries import (
     METER_READING_ENDPOINT,
     PAPERLESS_BILLING_ENDPOINT,
     PAYMENT_PLANS_ENDPOINT,
+    PREMISE_ENDPOINT,
 )
 
 
@@ -2132,3 +2133,299 @@ async def test_get_collection_arrangements_raises_data_extraction_error(
 
     with pytest.raises(DataExtractionError, match="Missing 'collectionArrangements' field"):
         await client.get_collection_arrangements("acct-001")
+
+
+# ---------------------------------------------------------------------------
+# get_premise
+# ---------------------------------------------------------------------------
+
+_PREMISE_NODE = {
+    "premiseSummaryKey": "PSK001",
+    "premiseNumber": "123456",
+    "premiseStatus": "ACTIVE",
+    "isCrisAddress": False,
+    "streetNumber": "1",
+    "streetName": "Example Road",
+    "streetAddress": "1 Example Road",
+    "apartment": "",
+    "city": "Anytown",
+    "buildingNumber": None,
+    "notes": None,
+    "zipcode": "12345",
+    "state": "NY",
+    "compressedAddress": "1 EXAMPLE RD, ANYTOWN, NY 12345",
+    "companyCode": "EXAMPLE_CO",
+    "region": "NY",
+    "meter": {
+        "nodes": [
+            {
+                "meterNumber": "M001",
+                "premiseNumber": "123456",
+                "fuelType": "ELECTRIC",
+                "meterStatus": "ACTIVE",
+            }
+        ]
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_get_premise_returns_nodes(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """get_premise returns parsed premise nodes including nested meter data."""
+    mock_session.post.return_value = _DummyResponse(
+        {"data": {"premise": {"nodes": [_PREMISE_NODE]}}}
+    )
+
+    client = NationalGridClient(config=config, session=mock_session)
+    result = await client.get_premise(
+        city="Anytown", state="NY", street_name="1 Example Road", zip_code="12345"
+    )
+
+    assert len(result) == 1
+    assert result[0]["premiseNumber"] == "123456"
+    assert result[0]["premiseStatus"] == "ACTIVE"
+    assert result[0]["compressedAddress"] == "1 EXAMPLE RD, ANYTOWN, NY 12345"
+    assert result[0]["meter"]["nodes"][0]["fuelType"] == "ELECTRIC"
+    assert result[0]["meter"]["nodes"][0]["meterNumber"] == "M001"
+
+
+@pytest.mark.asyncio
+async def test_get_premise_returns_empty_list(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """get_premise returns an empty list when no premises match."""
+    mock_session.post.return_value = _DummyResponse({"data": {"premise": {"nodes": []}}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    result = await client.get_premise(
+        city="Nowhere", state="NY", street_name="999 Fake Street", zip_code="00000"
+    )
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_get_premise_routes_to_premise_endpoint(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """get_premise sends the request to the premise-cu-uwp-gql endpoint."""
+    mock_session.post.return_value = _DummyResponse({"data": {"premise": {"nodes": []}}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_premise(
+        city="Anytown", state="NY", street_name="1 Example Road", zip_code="12345"
+    )
+
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == PREMISE_ENDPOINT
+    assert kwargs["json"]["operationName"] == "Premise"
+
+
+@pytest.mark.asyncio
+async def test_get_premise_sends_correct_variables(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """get_premise sends the expected GraphQL variables."""
+    mock_session.post.return_value = _DummyResponse({"data": {"premise": {"nodes": []}}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    await client.get_premise(
+        city="Anytown",
+        state="NY",
+        street_name="1 Example Road",
+        zip_code="12345",
+        apartment="2B",
+    )
+
+    variables = mock_session.post.call_args[1]["json"]["variables"]
+    assert variables["city"] == "Anytown"
+    assert variables["state"] == "NY"
+    assert variables["streetName"] == "1 Example Road"
+    assert variables["zipCode"] == "12345"
+    assert variables["apartment"] == "2B"
+
+
+@pytest.mark.asyncio
+async def test_get_premise_raises_data_extraction_error(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """DataExtractionError propagates when 'premise' field is absent."""
+    mock_session.post.return_value = _DummyResponse({"data": {}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+
+    with pytest.raises(DataExtractionError, match="Missing 'premise' field"):
+        await client.get_premise(
+            city="Anytown", state="NY", street_name="1 Example Road", zip_code="12345"
+        )
+
+
+# ---------------------------------------------------------------------------
+# get_electric_bill_history
+# ---------------------------------------------------------------------------
+
+_ELECTRIC_BILL = {
+    "readDate": "2026-04-13T00:00:00",
+    "readDays": 33,
+    "readType": "Actual",
+    "totalKwh": 144.0,
+    "utilityCharges": 34.29,
+    "supplierCharges": 11.75,
+    "latePayment": 0.0,
+    "totalCharges": 45.44,
+    "avgDailyUsage": 4.0,
+    "rkva": 0.0,
+    "meteredPeakKw": 0.0,
+    "meteredOnPeakKw": 0.0,
+    "billedPeakKw": 0.0,
+    "billedOnPeakKw": 0.0,
+    "touOnPeakKwh": 0.0,
+    "touOffPeakKwh": 0.0,
+    "loadFactor": 0.0,
+    "readFromDate": "2026-03-11T00:00:00",
+    "relativeMonthBillDate": "2026-04-01T00:00:00",
+    "timeStamp": "2026-04-13T18:17:15.304388",
+}
+
+_GAS_BILL = {
+    "readDate": "2026-04-13T00:00:00",
+    "readDays": 33,
+    "readType": "Actual",
+    "totalTherms": 57.0,
+    "utilityCharges": 69.26,
+    "supplierCharges": 35.86,
+    "latePayment": 0.0,
+    "totalCharges": 105.12,
+    "avgDailyUsage": 2.0,
+    "readFromDate": "2026-03-11T00:00:00",
+    "relativeMonthBillDate": "2026-04-01T00:00:00",
+    "timeStamp": "2026-04-13T18:17:15.299589",
+}
+
+
+@pytest.mark.asyncio
+async def test_get_electric_bill_history_returns_records(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Happy path: returns a list of ElectricBillRecord dicts."""
+    from py_nationalgrid.rest import RestResponse
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "_get_business_id_token", AsyncMock(return_value="id-tok"))
+    monkeypatch.setattr(
+        client,
+        "_request_business_rest",
+        AsyncMock(
+            return_value=RestResponse(
+                status=200, headers={}, data={"electricBillHistory": [_ELECTRIC_BILL]}
+            )
+        ),
+    )
+
+    records = await client.get_electric_bill_history("0209976152", "88144626")
+
+    assert len(records) == 1
+    assert records[0]["totalKwh"] == 144.0
+    assert records[0]["utilityCharges"] == 34.29
+    assert records[0]["supplierCharges"] == 11.75
+    assert records[0]["readFromDate"] == "2026-03-11T00:00:00"
+
+
+@pytest.mark.asyncio
+async def test_get_electric_bill_history_sends_correct_payload(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verifies the POST body and business auth headers are correct."""
+    from py_nationalgrid.rest import RestResponse
+    from py_nationalgrid.rest_queries import BUSINESS_SUBSCRIPTION_KEY
+
+    client = NationalGridClient(config=config, session=mock_session)
+    client._login_data["sub"] = "test-object-id"
+    monkeypatch.setattr(client, "_get_business_id_token", AsyncMock(return_value="id-tok"))
+    mock_rest = AsyncMock(
+        return_value=RestResponse(status=200, headers={}, data={"electricBillHistory": []})
+    )
+    monkeypatch.setattr(client, "_request_business_rest", mock_rest)
+
+    await client.get_electric_bill_history("0209976152", "88144626")
+
+    _, kwargs = mock_rest.call_args
+    assert kwargs["json"] == {
+        "accountNumber": "0209976152",
+        "customerNumber": "88144626",
+        "isPal": False,
+    }
+    headers = kwargs["headers"]
+    assert headers["Authorization"] == "Bearer id-tok"
+    assert headers["ObjectId"] == "test-object-id"
+    assert headers["Ocp-Apim-Subscription-Key"] == BUSINESS_SUBSCRIPTION_KEY
+
+
+@pytest.mark.asyncio
+async def test_get_electric_bill_history_returns_empty_on_204(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """204 No Content returns an empty list."""
+    from py_nationalgrid.rest import RestResponse
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "_get_business_id_token", AsyncMock(return_value="id-tok"))
+    monkeypatch.setattr(
+        client,
+        "_request_business_rest",
+        AsyncMock(return_value=RestResponse(status=204, headers={}, data=None)),
+    )
+
+    records = await client.get_electric_bill_history("0209976152", "88144626")
+    assert records == []
+
+
+# ---------------------------------------------------------------------------
+# get_gas_bill_history
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_gas_bill_history_returns_records(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Happy path: returns a list of GasBillRecord dicts."""
+    from py_nationalgrid.rest import RestResponse
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "_get_business_id_token", AsyncMock(return_value="id-tok"))
+    monkeypatch.setattr(
+        client,
+        "_request_business_rest",
+        AsyncMock(
+            return_value=RestResponse(status=200, headers={}, data={"gasBillHistory": [_GAS_BILL]})
+        ),
+    )
+
+    records = await client.get_gas_bill_history("0209976152", "88144626")
+
+    assert len(records) == 1
+    assert records[0]["totalTherms"] == 57.0
+    assert records[0]["utilityCharges"] == 69.26
+    assert records[0]["readFromDate"] == "2026-03-11T00:00:00"
+
+
+@pytest.mark.asyncio
+async def test_get_gas_bill_history_returns_empty_on_204(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """204 No Content returns an empty list."""
+    from py_nationalgrid.rest import RestResponse
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "_get_business_id_token", AsyncMock(return_value="id-tok"))
+    monkeypatch.setattr(
+        client,
+        "_request_business_rest",
+        AsyncMock(return_value=RestResponse(status=204, headers={}, data=None)),
+    )
+
+    records = await client.get_gas_bill_history("0209976152", "88144626")
+    assert records == []
