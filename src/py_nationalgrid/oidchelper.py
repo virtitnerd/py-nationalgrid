@@ -297,7 +297,7 @@ async def _get_auth_silent(
         ) as resp:
             status = resp.status
             location = str(resp.headers.get("Location", ""))
-    except aiohttp.ClientError as err:
+    except (TimeoutError, aiohttp.ClientError) as err:
         raise CannotConnectError(f"Silent auth network error: {err}") from err
 
     if status not in (301, 302, 303, 307, 308) or not location:
@@ -465,7 +465,7 @@ async def _fetch(
             content = await response.text()
             logger.debug("Fetch completed. Status: %s", response.status)
             return content, str(response.url), response.status
-    except aiohttp.ClientError as err:
+    except (TimeoutError, aiohttp.ClientError) as err:
         logger.exception("Network error occurred")
         raise CannotConnectError("Network error occurred") from err
 
