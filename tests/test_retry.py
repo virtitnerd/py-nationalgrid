@@ -68,7 +68,27 @@ async def test_retry_on_500_error(monkeypatch: pytest.MonkeyPatch):
     session.post = mock_post
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        """
+        Return a fixed authentication token triple used by tests.
+
+        Parameters:
+            session: Ignored; provided to match the real `async_login`
+                signature.
+            username: Ignored; provided to match the real `async_login`
+                signature.
+            password: Ignored; provided to match the real `async_login`
+                signature.
+            login_data: Ignored; provided to match the real `async_login`
+                signature.
+            timeout: Ignored; provided to match the real `async_login`
+                signature.
+
+        Returns:
+            tuple: `(access_token, id_token, expires_in)` where
+                `access_token` is `"token"`, `id_token` is `"id-tok"`,
+                and `expires_in` is `3600` (seconds).
+        """
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -92,7 +112,27 @@ async def test_retry_exhausted_raises_error(monkeypatch: pytest.MonkeyPatch):
     session.post.return_value = _MockResponse({}, status=500, raise_on_status=True)
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        """
+        Return a fixed authentication token triple used by tests.
+
+        Parameters:
+            session: Ignored; provided to match the real `async_login`
+                signature.
+            username: Ignored; provided to match the real `async_login`
+                signature.
+            password: Ignored; provided to match the real `async_login`
+                signature.
+            login_data: Ignored; provided to match the real `async_login`
+                signature.
+            timeout: Ignored; provided to match the real `async_login`
+                signature.
+
+        Returns:
+            tuple: `(access_token, id_token, expires_in)` where
+                `access_token` is `"token"`, `id_token` is `"id-tok"`,
+                and `expires_in` is `3600` (seconds).
+        """
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -133,9 +173,19 @@ async def test_401_clears_token_and_retries(monkeypatch: pytest.MonkeyPatch):
     login_count = 0
 
     async def _fake_login(self, session, username, password, login_data, timeout):
+        """
+        Simulate an asynchronous authentication call for tests and increment
+        the shared login counter.
+
+        Increments the outer-scope `login_count` and returns a tuple of
+        (access_token, id_token, expires_in).
+
+        Returns:
+            tuple[str, str, int]: (access_token, id_token, expires_in_seconds)
+        """
         nonlocal login_count
         login_count += 1
-        return f"token_{login_count}", 3600
+        return f"token_{login_count}", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -151,7 +201,15 @@ async def test_401_clears_token_and_retries(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_graphql_error_includes_context(monkeypatch: pytest.MonkeyPatch):
-    """Test that GraphQL errors include helpful context."""
+    """
+    Verify that a GraphQL error object contains request and HTTP context fields.
+
+    Asserts that executing a GraphQLRequest which results in an HTTP 404
+    produces a GraphQLError (or a RetryExhaustedError wrapping one) whose
+    `endpoint` and `query` are set, whose `variables` equal `{"id": "123"}`,
+    whose `status` equals `404`, and whose string representation includes
+    "404".
+    """
     config = NationalGridConfig(retry_config=RetryConfig(max_attempts=1, initial_delay=0.01))
     session = MagicMock(spec=aiohttp.ClientSession)
     session.closed = False
@@ -162,7 +220,27 @@ async def test_graphql_error_includes_context(monkeypatch: pytest.MonkeyPatch):
     session.post = mock_post
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        """
+        Return a fixed authentication token triple used by tests.
+
+        Parameters:
+            session: Ignored; provided to match the real `async_login`
+                signature.
+            username: Ignored; provided to match the real `async_login`
+                signature.
+            password: Ignored; provided to match the real `async_login`
+                signature.
+            login_data: Ignored; provided to match the real `async_login`
+                signature.
+            timeout: Ignored; provided to match the real `async_login`
+                signature.
+
+        Returns:
+            tuple: `(access_token, id_token, expires_in)` where
+                `access_token` is `"token"`, `id_token` is `"id-tok"`,
+                and `expires_in` is `3600` (seconds).
+        """
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -201,7 +279,27 @@ async def test_rest_api_error_includes_context(monkeypatch: pytest.MonkeyPatch):
     session.request = mock_request
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        """
+        Return a fixed authentication token triple used by tests.
+
+        Parameters:
+            session: Ignored; provided to match the real `async_login`
+                signature.
+            username: Ignored; provided to match the real `async_login`
+                signature.
+            password: Ignored; provided to match the real `async_login`
+                signature.
+            login_data: Ignored; provided to match the real `async_login`
+                signature.
+            timeout: Ignored; provided to match the real `async_login`
+                signature.
+
+        Returns:
+            tuple: `(access_token, id_token, expires_in)` where
+                `access_token` is `"token"`, `id_token` is `"id-tok"`,
+                and `expires_in` is `3600` (seconds).
+        """
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -239,7 +337,27 @@ async def test_no_retry_on_400_error(monkeypatch: pytest.MonkeyPatch):
     session.post = mock_post
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        """
+        Return a fixed authentication token triple used by tests.
+
+        Parameters:
+            session: Ignored; provided to match the real `async_login`
+                signature.
+            username: Ignored; provided to match the real `async_login`
+                signature.
+            password: Ignored; provided to match the real `async_login`
+                signature.
+            login_data: Ignored; provided to match the real `async_login`
+                signature.
+            timeout: Ignored; provided to match the real `async_login`
+                signature.
+
+        Returns:
+            tuple: `(access_token, id_token, expires_in)` where
+                `access_token` is `"token"`, `id_token` is `"id-tok"`,
+                and `expires_in` is `3600` (seconds).
+        """
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -272,7 +390,27 @@ async def test_retry_on_timeout(monkeypatch: pytest.MonkeyPatch):
     session.post = mock_post
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        """
+        Return a fixed authentication token triple used by tests.
+
+        Parameters:
+            session: Ignored; provided to match the real `async_login`
+                signature.
+            username: Ignored; provided to match the real `async_login`
+                signature.
+            password: Ignored; provided to match the real `async_login`
+                signature.
+            login_data: Ignored; provided to match the real `async_login`
+                signature.
+            timeout: Ignored; provided to match the real `async_login`
+                signature.
+
+        Returns:
+            tuple: `(access_token, id_token, expires_in)` where
+                `access_token` is `"token"`, `id_token` is `"id-tok"`,
+                and `expires_in` is `3600` (seconds).
+        """
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -318,7 +456,27 @@ async def test_no_retry_on_504_graphql_error(monkeypatch: pytest.MonkeyPatch):
     session.post = mock_post
 
     async def _fake_login(self, session, username, password, login_data, timeout):
-        return "token", 3600
+        """
+        Return a fixed authentication token triple used by tests.
+
+        Parameters:
+            session: Ignored; provided to match the real `async_login`
+                signature.
+            username: Ignored; provided to match the real `async_login`
+                signature.
+            password: Ignored; provided to match the real `async_login`
+                signature.
+            login_data: Ignored; provided to match the real `async_login`
+                signature.
+            timeout: Ignored; provided to match the real `async_login`
+                signature.
+
+        Returns:
+            tuple: `(access_token, id_token, expires_in)` where
+                `access_token` is `"token"`, `id_token` is `"id-tok"`,
+                and `expires_in` is `3600` (seconds).
+        """
+        return "token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 

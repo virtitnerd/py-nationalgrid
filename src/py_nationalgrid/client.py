@@ -11,7 +11,7 @@ from urllib.parse import urljoin
 
 import aiohttp
 
-from .auth import NationalGridAuth
+from .auth import NationalGridAuth, NationalGridBusinessAuth
 from .config import NationalGridConfig, RetryConfig
 from .exceptions import GraphQLError, RestAPIError, RetryExhaustedError
 from .extractors import (
@@ -21,14 +21,17 @@ from .extractors import (
     extract_billing_account,
     extract_bills,
     extract_collection_arrangements,
+    extract_electric_bill_history,
     extract_energy_usage_costs,
     extract_energy_usages,
+    extract_gas_bill_history,
     extract_interval_reads,
     extract_linked_accounts,
     extract_meter_reading,
     extract_paperless_billing,
     extract_payment_plans,
     extract_payments,
+    extract_premise,
 )
 from .graphql import GraphQLRequest, GraphQLResponse
 from .models import (
@@ -39,13 +42,16 @@ from .models import (
     Bill,
     BillingAccount,
     CollectionArrangement,
+    ElectricBillRecord,
     EnergyUsage,
     EnergyUsageCost,
+    GasBillRecord,
     IntervalRead,
     MeterReading,
     PaperlessBilling,
     Payment,
     PaymentPlan,
+    PremiseNode,
 )
 from .oidchelper import LoginData
 from .queries import (
@@ -62,9 +68,15 @@ from .queries import (
     paperless_billing_request,
     payment_plans_request,
     payments_request,
+    premise_request,
 )
 from .rest import RestResponse
-from .rest_queries import realtime_meter_info_request
+from .rest_queries import (
+    BUSINESS_SUBSCRIPTION_KEY,
+    electric_bill_history_request,
+    gas_bill_history_request,
+    realtime_meter_info_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,11 +137,29 @@ class NationalGridClient:
         *,
         session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """
+        Initialize a NationalGridClient with optional configuration and
+        an existing aiohttp session.
+
+        Parameters:
+            config (NationalGridConfig | None): Client configuration; a
+                default config is created when None.
+            session (aiohttp.ClientSession | None): An existing aiohttp
+                session to reuse; when None the client will create and
+                own its own session.
+
+        Description:
+            Sets up internal caches and asyncio locks used for session
+            management and separate consumer/business token handling.
+        """
         self._config = config or NationalGridConfig()
         self._session = session
         self._owns_session = session is None
         self._access_token: str | None = None
         self._token_expires_at: float | None = None
+        self._business_id_token: str | None = None
+        self._business_token_expires_at: float | None = None
+        self._business_auth_lock = asyncio.Lock()
         self._auth_lock = asyncio.Lock()
         self._session_lock = asyncio.Lock()
         self._login_data: LoginData = {}
@@ -239,19 +269,28 @@ class NationalGridClient:
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
     ) -> GraphQLResponse:
-        """Execute a GraphQL request with retry logic.
+        """
+        Execute the given GraphQLRequest against the configured endpoint
+        and return its parsed response.
 
-        Args:
-            request: GraphQL request to execute
-            headers: Additional headers to include
-            timeout: Request timeout in seconds
+        Parameters:
+            request (GraphQLRequest): The GraphQL request to send (query,
+                variables, and optional per-request endpoint).
+            headers (Mapping[str, str] | None): Additional HTTP headers
+                to include with the request.
+            timeout (float | None): Request timeout in seconds; falls
+                back to client configuration when omitted.
 
         Returns:
-            GraphQL response
+            GraphQLResponse: Parsed response payload. If the GraphQL
+                payload includes errors they are preserved on the
+                returned response object.
 
         Raises:
-            GraphQLError: When the request fails after all retries
+            GraphQLError: When a single request fails with HTTP or
+                parsing errors and is not retryable.
             RetryExhaustedError: When all retry attempts are exhausted
+                without a successful response.
         """
         retry_config = self._config.retry_config
         last_error: Exception | None = None
@@ -381,6 +420,75 @@ class NationalGridClient:
             last_error=last_error or Exception("Unknown error"),
         )
 
+    async def _request_business_rest(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: Any | None = None,
+        headers: Mapping[str, str],
+        timeout: float | None = None,
+    ) -> RestResponse:
+        """
+        Send a REST request to the business portal using the provided
+        headers.
+
+        This call uses the exact `headers` supplied (no header merging or
+        consumer header construction) and returns the parsed response
+        payload. It raises `RestAPIError` for non-2xx HTTP responses.
+
+        Parameters:
+            headers (Mapping[str, str]): Explicit business-portal headers
+                to send (e.g., `Authorization: Bearer <id_token>` and
+                subscription key).
+            timeout (float | None): Total request timeout in seconds;
+                when `None` the client's configured timeout is used.
+            json (Any | None): JSON-serializable request body to include,
+                if any.
+
+        Returns:
+            RestResponse: An object containing `status`, response
+                `headers`, and parsed `data`.
+
+        Raises:
+            RestAPIError: If the response has a non-2xx status; the error
+                includes the status and best-effort response text.
+        """
+        session = await self._ensure_session()
+        effective_timeout = aiohttp.ClientTimeout(total=timeout or self._config.timeout)
+        logger.debug("%s %s", method.upper(), url)
+
+        async with session.request(
+            method=method,
+            url=url,
+            json=json,
+            headers=dict(headers),
+            timeout=effective_timeout,
+            ssl=self._config.verify_ssl,
+        ) as response:
+            try:
+                response.raise_for_status()
+            except aiohttp.ClientResponseError as e:
+                try:
+                    response_text = await response.text()
+                except Exception:
+                    response_text = None
+                raise RestAPIError(
+                    f"REST request failed with status {e.status}",
+                    url=url,
+                    method=method,
+                    status=e.status,
+                    response_text=response_text,
+                    original_error=e,
+                ) from e
+
+            payload = await self._read_rest_payload(response)
+            return RestResponse(
+                status=response.status,
+                headers=dict(response.headers),
+                data=payload,
+            )
+
     async def request_rest(
         self,
         method: str,
@@ -392,23 +500,33 @@ class NationalGridClient:
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
     ) -> RestResponse:
-        """Issue a REST request with retry logic.
+        """
+        Perform an HTTP REST request using the client's session, applying
+        configured authentication and retry logic.
 
-        Args:
-            method: HTTP method (GET, POST, etc.)
-            path_or_url: URL path or full URL
-            params: Query parameters
-            json: JSON payload
-            data: Form data
-            headers: Additional headers
-            timeout: Request timeout in seconds
+        Parameters:
+            path_or_url (str): Absolute URL or a relative path; relative
+                paths are resolved against the client's REST base URL.
+            headers (Mapping[str, str] | None): Additional headers to
+                merge with the client's built headers.
+            json (Any | None): JSON body to send (sets Content-Type:
+                application/json).
+            data (Any | None): Non-JSON request body.
+            params (Mapping[str, str] | None): Query parameters to
+                include in the request.
+            timeout (float | None): Request timeout in seconds; falls
+                back to the client's default timeout when omitted.
 
         Returns:
-            REST response
+            RestResponse: Response container with `status`, `headers`,
+                and parsed `data` (JSON or text).
 
         Raises:
-            RestAPIError: When the request fails after all retries
+            RestAPIError: When a non-2xx HTTP response is returned or a
+                non-retryable error occurs and is converted to a REST
+                error.
             RetryExhaustedError: When all retry attempts are exhausted
+                without a successful response.
         """
         retry_config = self._config.retry_config
         last_error: Exception | None = None
@@ -534,6 +652,22 @@ class NationalGridClient:
 
     async def _get_access_token(self, session: aiohttp.ClientSession) -> str | None:
         # Check if we have a valid cached token
+        """
+        Obtain a cached consumer access token, refreshing it when it is
+        near expiration.
+
+        Checks the in-memory token and returns it if still valid beyond a
+        small expiry buffer. If no username/password are configured,
+        returns None. When refresh is required, acquires the auth lock to
+        serialize login, performs authentication, updates the cached token
+        and its expiry timestamp on success, and returns the cached token
+        or None if login failed.
+
+        Returns:
+            str | None: The access token string if available, `None` when
+                credentials are missing or authentication did not produce
+                a token.
+        """
         if self._access_token and self._token_expires_at:
             # Add buffer time to refresh before actual expiration
             if time.time() < (self._token_expires_at - TOKEN_EXPIRY_BUFFER_SECONDS):
@@ -550,7 +684,7 @@ class NationalGridClient:
                     return self._access_token
 
             auth_client = NationalGridAuth()
-            token, expires_in = await auth_client.async_login(
+            token, _, expires_in = await auth_client.async_login(
                 session,
                 self._config.username,
                 self._config.password,
@@ -567,7 +701,82 @@ class NationalGridClient:
 
         return self._access_token
 
+    async def _get_business_id_token(self) -> str | None:
+        """
+        Obtain and cache a business-portal id_token suitable for calling
+        business REST endpoints.
+
+        Attempts silent SSO (prompt=none) using the shared consumer
+        session cookies to acquire an id_token scoped for the business
+        portal, caches it with an expiry buffer, and returns the cached
+        token when still valid.
+
+        Returns:
+            str | None: The business `id_token` if acquired or cached,
+                `None` if credentials are unavailable or the silent SSO
+                attempt fails.
+        """
+        if self._business_id_token and self._business_token_expires_at:
+            if time.time() < (self._business_token_expires_at - TOKEN_EXPIRY_BUFFER_SECONDS):
+                return self._business_id_token
+
+        if not (self._config.username and self._config.password):
+            return None
+
+        async with self._business_auth_lock:
+            if self._business_id_token and self._business_token_expires_at:
+                if time.time() < (self._business_token_expires_at - TOKEN_EXPIRY_BUFFER_SECONDS):
+                    return self._business_id_token
+
+            # Ensure consumer portal auth has run — this populates B2C cookies on session.
+            session = await self._ensure_session()
+            await self._get_access_token(session)
+
+            business_auth = NationalGridBusinessAuth()
+            login_data: LoginData = LoginData()
+            try:
+                result = await business_auth.async_login(
+                    session,
+                    self._config.username or "",
+                    self._config.password or "",
+                    login_data,
+                    timeout=self._config.timeout,
+                )
+            except Exception as err:
+                logger.error("Business portal silent SSO failed: %s", err)
+                return None
+
+            if result[0] is None:
+                logger.warning("Business portal silent SSO returned no token")
+                return None
+
+            _, id_token, expires_in = result
+            if id_token:
+                self._business_id_token = id_token
+                self._business_token_expires_at = time.time() + expires_in
+                logger.debug("Business id_token obtained, expires in %d seconds", expires_in)
+            else:
+                logger.error("Business portal silent SSO produced no id_token")
+
+        return self._business_id_token
+
     def _resolve_rest_url(self, path_or_url: str) -> str:
+        """
+        Resolve a REST endpoint string into a fully qualified URL.
+
+        Parameters:
+            path_or_url (str): An absolute URL or a relative REST path.
+                If an absolute URL (starts with "http://" or "https://"),
+                it is returned unchanged. If a relative path is provided,
+                it is joined with the configured `rest_base_url`.
+
+        Returns:
+            str: A fully qualified URL for the REST request.
+
+        Raises:
+            ValueError: If `path_or_url` is a relative path and
+                `self._config.rest_base_url` is not set.
+        """
         if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
             return path_or_url
         if not self._config.rest_base_url:
@@ -582,6 +791,19 @@ class NationalGridClient:
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         # Fast path: check without lock if session exists and is open
+        """
+        Ensure and return a usable aiohttp.ClientSession, creating one if
+        necessary.
+
+        Creates a new ClientSession with timeouts and a TCPConnector
+        configured from the client's config when there is no existing open
+        session. Session creation is serialized with an async lock to
+        prevent concurrent initializations.
+
+        Returns:
+            aiohttp.ClientSession: An open ClientSession instance owned
+                by this client.
+        """
         if self._session and not self._session.closed:
             return self._session
 
@@ -603,6 +825,31 @@ class NationalGridClient:
                 connector=connector,
             )
             return self._session
+
+    def _build_business_headers(self, id_token: str) -> dict[str, str]:
+        """
+        Builds the HTTP headers required for authenticated business-portal
+        requests.
+
+        Parameters:
+            id_token (str): Business portal ID token to place in the
+                `Authorization` header.
+
+        Returns:
+            dict[str, str]: Dictionary of HTTP headers including:
+                - `Authorization`: `Bearer {id_token}`
+                - `ObjectId`: user object id from the client's cached
+                  login data (empty string if missing)
+                - `Ocp-Apim-Subscription-Key`: the business subscription
+                  key
+                - `Content-Type`: `application/json`
+        """
+        return {
+            "Authorization": f"Bearer {id_token}",
+            "ObjectId": self._login_data.get("sub", ""),
+            "Ocp-Apim-Subscription-Key": BUSINESS_SUBSCRIPTION_KEY,
+            "Content-Type": "application/json",
+        }
 
     # -------------------------------------------------------------------------
     # Typed public methods
@@ -1409,3 +1656,148 @@ class NationalGridClient:
                 return []
             raise
         return extract_interval_reads(response)
+
+    async def get_premise(
+        self,
+        *,
+        city: str,
+        state: str,
+        street_name: str,
+        zip_code: str,
+        apartment: str | None = None,
+        allow_cris_addresses: bool | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> list[PremiseNode]:
+        """Look up premise information by address.
+
+        This endpoint does not require authentication — it is publicly accessible
+        via the National Grid residential portal.
+
+        Args:
+            city: City name (e.g. "Anytown")
+            state: Two-letter state abbreviation (e.g. "NY")
+            street_name: Full street address line (e.g. "1 Example Road")
+            zip_code: ZIP code (e.g. "12345")
+            apartment: Apartment or unit number, or None
+            allow_cris_addresses: Whether to include CRIS addresses, or None
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            List of matching premise nodes, each containing premiseNumber and
+            associated meter nodes (meterNumber, fuelType, meterStatus).
+            Returns an empty list when no premises match the address.
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the response is not in expected format
+        """
+        request = premise_request(
+            variables={
+                "apartment": apartment or "",
+                "city": city,
+                "state": state,
+                "streetName": street_name,
+                "zipCode": zip_code,
+                "allowCrisAddresses": allow_cris_addresses,
+            }
+        )
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_premise(response)
+
+    async def get_electric_bill_history(
+        self,
+        account_number: str,
+        customer_number: str,
+        *,
+        is_pal: bool = False,
+        timeout: float | None = None,
+    ) -> list[ElectricBillRecord]:
+        """Get detailed electric billing history from the business portal.
+
+        Returns per-billing-period electric meter data including the utility/supplier
+        charge breakdown, total kWh, average daily usage, and demand fields (TOU,
+        peak kW) not available through the standard GraphQL bills endpoint.
+
+        Requires authentication. Uses the business portal API gateway with idToken
+        auth — credentials must be provided in NationalGridConfig.
+
+        Args:
+            account_number: Billing account number
+            customer_number: Customer number (available from get_billing_account())
+            is_pal: Whether the account is on a PAL rate plan (default False)
+            timeout: Request timeout in seconds
+
+        Returns:
+            List of electric bill records, newest first
+
+        Raises:
+            RestAPIError: When the REST request fails
+            DataExtractionError: When the response is not in expected format
+        """
+        id_token = await self._get_business_id_token()
+        rest_request = electric_bill_history_request(
+            account_number=account_number,
+            customer_number=customer_number,
+            is_pal=is_pal,
+        )
+        business_headers = self._build_business_headers(id_token or "")
+        response = await self._request_business_rest(
+            rest_request.method,
+            rest_request.path_or_url,
+            json=rest_request.json,
+            headers=business_headers,
+            timeout=timeout,
+        )
+        return extract_electric_bill_history(response)
+
+    async def get_gas_bill_history(
+        self,
+        account_number: str,
+        customer_number: str,
+        *,
+        is_pal: bool = False,
+        timeout: float | None = None,
+    ) -> list[GasBillRecord]:
+        """
+        Retrieve detailed gas billing history from the business portal for
+        a billing account.
+
+        Returns per-billing-period gas meter data including
+        supplier/utility charge breakdown, total therms, and average daily
+        usage; this data is not available from the consumer GraphQL bills
+        endpoint. Requires business-portal authentication (id token)
+        configured in NationalGridConfig.
+
+        Parameters:
+            account_number (str): Billing account number.
+            customer_number (str): Customer identifier associated with the
+                account.
+            is_pal (bool): Whether the account is on a PAL rate plan.
+                Defaults to False.
+            timeout (float | None): Request timeout in seconds.
+
+        Returns:
+            list[GasBillRecord]: Gas bill records ordered newest first.
+
+        Raises:
+            RestAPIError: If the REST request returns a non-2xx response.
+            DataExtractionError: If the response payload cannot be parsed
+                into expected bill records.
+        """
+        id_token = await self._get_business_id_token()
+        rest_request = gas_bill_history_request(
+            account_number=account_number,
+            customer_number=customer_number,
+            is_pal=is_pal,
+        )
+        business_headers = self._build_business_headers(id_token or "")
+        response = await self._request_business_rest(
+            rest_request.method,
+            rest_request.path_or_url,
+            json=rest_request.json,
+            headers=business_headers,
+            timeout=timeout,
+        )
+        return extract_gas_bill_history(response)

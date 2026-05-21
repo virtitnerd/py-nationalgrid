@@ -9,6 +9,7 @@ from .graphql import GraphQLRequest, compose_query
 
 DEFAULT_SELECTION_SET = "__typename"
 LINKED_BILLING_ENDPOINT = "https://myaccount.nationalgrid.com/api/user-cu-uwp-gql"
+PREMISE_ENDPOINT = "https://myaccount.nationalgrid.com/api/premise-cu-uwp-gql"
 BILLING_ACCOUNT_INFO_ENDPOINT = "https://myaccount.nationalgrid.com/api/billingaccount-cu-uwp-gql"
 ENERGY_USAGE_ENDPOINT = "https://myaccount.nationalgrid.com/api/energyusage-cu-uwp-gql"
 BILL_ENDPOINT = "https://myaccount.nationalgrid.com/api/bill-cu-uwp-gql"
@@ -203,6 +204,34 @@ nodes {
     planSequenceNumber
     reactivationFee
     planCompletedDate
+}
+"""
+PREMISE_SELECTION_SET = """
+nodes {
+    premiseSummaryKey
+    premiseNumber
+    premiseStatus
+    isCrisAddress
+    streetNumber
+    streetName
+    streetAddress
+    apartment
+    city
+    buildingNumber
+    notes
+    zipcode
+    state
+    compressedAddress
+    companyCode
+    region
+    meter {
+        nodes {
+            meterNumber
+            premiseNumber
+            fuelType
+            meterStatus
+        }
+    }
 }
 """
 COLLECTION_ARRANGEMENTS_SELECTION_SET = """
@@ -585,11 +614,20 @@ def collection_arrangements_request(
     selection_set: str = COLLECTION_ARRANGEMENTS_SELECTION_SET,
     operation_name: str = "CollectionArrangements",
 ) -> GraphQLRequest:
-    """Build a collection arrangements query.
+    """
+    Builds a collection arrangements GraphQL request for a given account.
 
-    This request targets the collections-cu-uwp-gql GraphQL endpoint.
-    Uses inline account number (no GraphQL variables) to avoid server-side
-    HC0011 parse errors on this endpoint.
+    The provided `account_number` is embedded directly into the root field
+    arguments (no GraphQL variables are sent). The returned request
+    targets the collection arrangements endpoint.
+
+    Parameters:
+        account_number (str): Account number to embed in the query root
+            field.
+
+    Returns:
+        GraphQLRequest: A request object containing the composed query,
+            variables (None), operation name, and endpoint.
     """
     return StandardQuery(
         operation_name=operation_name,
@@ -602,7 +640,74 @@ def collection_arrangements_request(
     ).to_request()
 
 
+def premise_request(
+    *,
+    selection_set: str = PREMISE_SELECTION_SET,
+    variables: Mapping[str, Any] | None = None,
+    variable_definitions: str | Sequence[str] | None = (
+        "$apartment: String",
+        "$city: String!",
+        "$state: String!",
+        "$streetName: String!",
+        "$zipCode: String!",
+        "$allowCrisAddresses: Boolean",
+    ),
+    field_arguments: str | None = (
+        "allowCrisAddresses: $allowCrisAddresses, "
+        "where: {state: {eq: $state}, city: {eq: $city}, zipcode: {eq: $zipCode}, "
+        "streetName: {eq: $streetName}, apartment: {eq: $apartment}}"
+    ),
+    operation_name: str = "Premise",
+) -> GraphQLRequest:
+    """
+    Builds a GraphQL request to look up a premise by address.
+
+    Targets the premise-cu-uwp-gql endpoint (PREMISE_ENDPOINT) and does
+    not require authentication.
+
+    Parameters:
+        variables (Mapping[str, Any] | None): Optional mapping of GraphQL
+            variable values. Common keys: `apartment`, `city`, `state`,
+            `streetName`, `zipCode`, `allowCrisAddresses`.
+        variable_definitions (str | Sequence[str] | None): GraphQL
+            variable definitions to include in the operation signature
+            (defaults include definitions for the address fields and
+            `allowCrisAddresses`).
+        field_arguments (str | None): Arguments passed to the root
+            `premise` field; by default this builds a `where` filter
+            using the address variables and `allowCrisAddresses`.
+
+    Returns:
+        GraphQLRequest: The composed GraphQL request containing the query,
+            variables, operation name, and endpoint.
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field="premise",
+        selection_set=selection_set,
+        variables=variables,
+        variable_definitions=variable_definitions,
+        field_arguments=field_arguments,
+        endpoint=PREMISE_ENDPOINT,
+    ).to_request()
+
+
 def _normalize_variable_definitions(value: str | Sequence[str] | None) -> str | None:
+    """
+    Normalize GraphQL variable definition fragments into a single
+    comma-separated declaration string.
+
+    Parameters:
+        value (str | Sequence[str] | None): A variable definition,
+            multiple definitions, or None. If a string, leading/trailing
+            whitespace is removed. If a sequence, each item is stripped
+            and empty items are ignored.
+
+    Returns:
+        str | None: A single comma-separated string of cleaned variable
+            definitions, or `None` when `value` is `None` or yields no
+            non-empty definitions.
+    """
     if value is None:
         return None
     if isinstance(value, str):

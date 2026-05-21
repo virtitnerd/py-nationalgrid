@@ -36,6 +36,7 @@ uv run python examples/interval-reads.py    --username user@example.com --passwo
 uv run python examples/energy-usage.py      --username user@example.com --password secret
 uv run python examples/ami-usage.py         --username user@example.com --password secret
 uv run python examples/ami-usage.py         --username user@example.com --password secret --fuel-type ELECTRIC --days 45
+uv run python examples/bill-history.py      --username user@example.com --password secret
 uv run python examples/ami-usage.py         --username user@example.com --password secret --15min
 ```
 
@@ -117,6 +118,9 @@ The public API consists of typed `get_*` methods on `NationalGridClient`:
 - `get_ami_energy_usages()` → `list[AmiEnergyUsage]` — **primary AMI method**; tries `NrtDailyUsage` first, falls back to `get_ami_energy_usages_15min()` on failure; see section below
 - `get_ami_energy_usages_15min()` → `list[AmiEnergyUsage]` — explicit 15-min endpoint with automatic chunking; use directly when you need 15-min granularity specifically
 - `get_interval_reads()` → `list[IntervalRead]` — returns `[]` on 404 (GAS meters with no interval data)
+- `get_premise()` → `list[PremiseNode]` — **public endpoint, no auth required**; looks up premise number and meter nodes by address (`city`, `state`, `street_name`, `zip_code`)
+- `get_electric_bill_history(account_number, customer_number)` → `list[ElectricBillRecord]` — **business portal**; per-billing-period electric data with utility/supplier charge breakdown and demand fields; `customer_number` from `get_billing_account()`
+- `get_gas_bill_history(account_number, customer_number)` → `list[GasBillRecord]` — **business portal**; per-billing-period gas data with utility/supplier charge breakdown; `customer_number` from `get_billing_account()`
 
 Each method builds a request internally, executes it via `execute()` or `request_rest()`, and extracts the typed result using extractors (extractors.py). All response models are TypedDicts defined in models.py.
 

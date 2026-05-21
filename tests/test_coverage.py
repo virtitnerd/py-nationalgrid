@@ -22,11 +22,14 @@ from py_nationalgrid.extractors import (
     extract_balanced_billing,
     extract_bills,
     extract_collection_arrangements,
+    extract_electric_bill_history,
+    extract_gas_bill_history,
     extract_interval_reads,
     extract_meter_reading,
     extract_paperless_billing,
     extract_payment_plans,
     extract_payments,
+    extract_premise,
 )
 from py_nationalgrid.graphql import GraphQLRequest, GraphQLResponse
 from py_nationalgrid.helpers import create_cookie_jar
@@ -103,11 +106,11 @@ async def test_auth_async_login_delegates_to_oidc() -> None:
     with patch(
         "py_nationalgrid.auth.async_auth_oidc",
         new_callable=AsyncMock,
-        return_value=("tok", 3600),
+        return_value=("tok", "id-tok", 3600),
     ):
         result = await auth.async_login(session, "user@x.com", "pw", login_data)
 
-    assert result == ("tok", 3600)
+    assert result == ("tok", "id-tok", 3600)
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +418,16 @@ async def test_get_access_token_refreshes_when_expiring_soon(
     client._token_expires_at = time.time() + 100  # < 300s buffer → refresh
 
     async def _fake_login(self, sess, user, pw, login_data, timeout):
-        return "new-token", 3600
+        """
+        Return a fixed (access token, ID token, expires_in) tuple used by
+        tests.
+
+        Returns:
+            tuple: A 3-tuple (access_token, id_token, expires_in_seconds)
+                where `access_token` is "new-token", `id_token` is
+                "id-tok", and `expires_in_seconds` is 3600.
+        """
+        return "new-token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -451,13 +463,21 @@ async def test_get_access_token_double_check_finds_fresh_token_under_lock() -> N
 
 @pytest.mark.asyncio
 async def test_get_access_token_login_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When async_login returns (None, None), token is cleared (lines 508-509)."""
+    """When async_login returns (None, None, None), token is cleared (lines 508-509)."""
     config = NationalGridConfig(username="u@x.com", password="pw")
     session = MagicMock(spec=aiohttp.ClientSession)
     client = NationalGridClient(config=config, session=session)
 
     async def _fake_login(self, sess, user, pw, login_data, timeout):
-        return None, None
+        """
+        Test helper that simulates a failed authentication and produces no
+        token data.
+
+        @returns
+            `(None, None, None)` indicating no access token, no id token,
+            and no expiry were obtained.
+        """
+        return None, None, None
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -550,7 +570,7 @@ async def test_execute_body_none_when_json_raises_after_error_status(
 
     monkeypatch.setattr(
         "py_nationalgrid.client.NationalGridAuth.async_login",
-        AsyncMock(return_value=("tok", 3600)),
+        AsyncMock(return_value=("tok", "id-tok", 3600)),
     )
 
     client = NationalGridClient(config=config, session=session)
@@ -583,7 +603,7 @@ async def test_execute_non_graphql_error_wrapped(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(
         "py_nationalgrid.client.NationalGridAuth.async_login",
-        AsyncMock(return_value=("tok", 3600)),
+        AsyncMock(return_value=("tok", "id-tok", 3600)),
     )
 
     client = NationalGridClient(config=config, session=session)
@@ -612,7 +632,15 @@ async def test_request_rest_401_clears_cached_token(monkeypatch: pytest.MonkeyPa
     session.request.return_value = _MockResponse({}, status=401, raise_on_status=True)
 
     async def _fake_login(self, sess, user, pw, login_data, timeout):
-        return "tok", 3600
+        """
+        Return a fixed authentication tuple used for tests.
+
+        Returns:
+            tuple: A 3-tuple (access_token, id_token, expires_in) where
+                `access_token` is "tok", `id_token` is "id-tok", and
+                `expires_in` is 3600.
+        """
+        return "tok", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
 
@@ -645,7 +673,7 @@ async def test_request_rest_response_text_none_when_text_raises(
 
     monkeypatch.setattr(
         "py_nationalgrid.client.NationalGridAuth.async_login",
-        AsyncMock(return_value=("tok", 3600)),
+        AsyncMock(return_value=("tok", "id-tok", 3600)),
     )
 
     client = NationalGridClient(config=config, session=session)
@@ -679,7 +707,7 @@ async def test_request_rest_non_retryable_rest_error_reraises(
 
     monkeypatch.setattr(
         "py_nationalgrid.client.NationalGridAuth.async_login",
-        AsyncMock(return_value=("tok", 3600)),
+        AsyncMock(return_value=("tok", "id-tok", 3600)),
     )
 
     client = NationalGridClient(config=config, session=session)
@@ -702,7 +730,7 @@ async def test_request_rest_non_rest_error_wrapped(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(
         "py_nationalgrid.client.NationalGridAuth.async_login",
-        AsyncMock(return_value=("tok", 3600)),
+        AsyncMock(return_value=("tok", "id-tok", 3600)),
     )
 
     client = NationalGridClient(config=config, session=session)
@@ -739,7 +767,7 @@ async def test_request_rest_retries_on_500_and_logs(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(
         "py_nationalgrid.client.NationalGridAuth.async_login",
-        AsyncMock(return_value=("tok", 3600)),
+        AsyncMock(return_value=("tok", "id-tok", 3600)),
     )
 
     client = NationalGridClient(config=config, session=session)
@@ -952,3 +980,156 @@ async def test_15min_first_chunk_daily_fallback_non_504_propagates() -> None:
             date_to=date(2024, 3, 31),
             fuel_type="ELECTRIC",
         )
+
+
+# ---------------------------------------------------------------------------
+# extract_premise
+# ---------------------------------------------------------------------------
+
+_PREMISE_NODE = {
+    "premiseSummaryKey": "PSK001",
+    "premiseNumber": "123456",
+    "premiseStatus": "ACTIVE",
+    "isCrisAddress": False,
+    "streetNumber": "1",
+    "streetName": "Example Road",
+    "streetAddress": "1 Example Road",
+    "apartment": "",
+    "city": "Anytown",
+    "buildingNumber": None,
+    "notes": None,
+    "zipcode": "12345",
+    "state": "NY",
+    "compressedAddress": "1 EXAMPLE RD, ANYTOWN, NY 12345",
+    "companyCode": "EXAMPLE_CO",
+    "region": "NY",
+    "meter": {
+        "nodes": [
+            {
+                "meterNumber": "M001",
+                "premiseNumber": "123456",
+                "fuelType": "ELECTRIC",
+                "meterStatus": "ACTIVE",
+            }
+        ]
+    },
+}
+
+
+def test_extract_premise_returns_nodes() -> None:
+    response = GraphQLResponse(data={"premise": {"nodes": [_PREMISE_NODE]}}, errors=None)
+    result = extract_premise(response)
+    assert len(result) == 1
+    assert result[0]["premiseNumber"] == "123456"
+    assert result[0]["meter"]["nodes"][0]["fuelType"] == "ELECTRIC"
+
+
+def test_extract_premise_returns_empty_list() -> None:
+    response = GraphQLResponse(data={"premise": {"nodes": []}}, errors=None)
+    assert extract_premise(response) == []
+
+
+def test_extract_premise_raises_on_missing_premise_field() -> None:
+    response = GraphQLResponse(data={}, errors=None)
+    with pytest.raises(DataExtractionError, match="Missing 'premise' field"):
+        extract_premise(response)
+
+
+def test_extract_premise_raises_on_missing_nodes_field() -> None:
+    response = GraphQLResponse(data={"premise": {}}, errors=None)
+    with pytest.raises(DataExtractionError, match="Missing 'nodes' field"):
+        extract_premise(response)
+
+
+def test_extract_premise_raises_on_null_data() -> None:
+    response = GraphQLResponse(data=None, errors=None)
+    with pytest.raises(DataExtractionError, match="Response data is null"):
+        extract_premise(response)
+
+
+# ---------------------------------------------------------------------------
+# extractors.py — extract_electric_bill_history
+# ---------------------------------------------------------------------------
+
+
+def test_extract_electric_bill_history_returns_list() -> None:
+    record = {"readDate": "2026-04-13T00:00:00", "totalKwh": 144.0}
+    response = RestResponse(status=200, headers={}, data={"electricBillHistory": [record]})
+    result = extract_electric_bill_history(response)
+    assert result == [record]
+
+
+def test_extract_electric_bill_history_returns_empty_on_204() -> None:
+    response = RestResponse(status=204, headers={}, data=None)
+    assert extract_electric_bill_history(response) == []
+
+
+def test_extract_electric_bill_history_raises_on_non_list() -> None:
+    response = RestResponse(status=200, headers={}, data={"error": "bad"})
+    with pytest.raises(DataExtractionError, match="Expected list of electric bill records"):
+        extract_electric_bill_history(response)
+
+
+# ---------------------------------------------------------------------------
+# extractors.py — extract_gas_bill_history
+# ---------------------------------------------------------------------------
+
+
+def test_extract_gas_bill_history_returns_list() -> None:
+    record = {"readDate": "2026-04-13T00:00:00", "totalTherms": 57.0}
+    response = RestResponse(status=200, headers={}, data={"gasBillHistory": [record]})
+    result = extract_gas_bill_history(response)
+    assert result == [record]
+
+
+def test_extract_gas_bill_history_returns_empty_on_204() -> None:
+    response = RestResponse(status=204, headers={}, data=None)
+    assert extract_gas_bill_history(response) == []
+
+
+def test_extract_gas_bill_history_raises_on_non_list() -> None:
+    response = RestResponse(status=200, headers={}, data={"error": "bad"})
+    with pytest.raises(DataExtractionError, match="Expected list of gas bill records"):
+        extract_gas_bill_history(response)
+
+
+def test_extract_electric_bill_history_raises_when_inner_value_not_list() -> None:
+    response = RestResponse(status=200, headers={}, data={"electricBillHistory": "bad"})
+    with pytest.raises(DataExtractionError, match="Expected list of electric bill records"):
+        extract_electric_bill_history(response)
+
+
+def test_extract_gas_bill_history_raises_when_inner_value_not_list() -> None:
+    response = RestResponse(status=200, headers={}, data={"gasBillHistory": 42})
+    with pytest.raises(DataExtractionError, match="Expected list of gas bill records"):
+        extract_gas_bill_history(response)
+
+
+# ---------------------------------------------------------------------------
+# auth.py — NationalGridBusinessAuth.async_login
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_business_auth_async_login_delegates_to_oidc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NationalGridBusinessAuth.async_login calls async_auth_oidc with prompt=none."""
+    import py_nationalgrid.auth as auth_module
+    from py_nationalgrid.auth import NationalGridBusinessAuth
+    from py_nationalgrid.oidchelper import LoginData
+
+    mock_oidc = AsyncMock(return_value=("access", "id", 3600))
+    monkeypatch.setattr(auth_module, "async_auth_oidc", mock_oidc)
+
+    business_auth = NationalGridBusinessAuth()
+    result = await business_auth.async_login(
+        session=None,
+        username="user@example.com",
+        password="secret",
+        login_data=LoginData(),
+    )
+
+    assert result == ("access", "id", 3600)
+    _, kwargs = mock_oidc.call_args
+    assert kwargs.get("extra_auth_params") == {"prompt": "none"}

@@ -56,7 +56,8 @@ async def async_auth_oidc(
     policy_confirm_endpoint: str,
     login_data: LoginData | None = None,
     timeout: float = 30.0,
-) -> tuple[str, int] | tuple[None, None]:
+    extra_auth_params: dict[str, str] | None = None,
+) -> tuple[str, str, int] | tuple[None, None, None]:
     """Perform the login process and return an access token with expiry time.
 
     Args:
@@ -86,7 +87,8 @@ async def async_auth_oidc(
         timeout: Request timeout in seconds for authentication requests (default: 30.0)
 
     Returns:
-        Tuple of (access_token, expires_in_seconds) on success, (None, None) on failure.
+        Tuple of (access_token, id_token, expires_in_seconds) on success,
+        (None, None, None) on failure.
     """
     # Use provided session or create one with proper SSL and cookie handling
     # Azure AD B2C requires specific cookie handling (quote_cookie=False)
@@ -123,6 +125,7 @@ async def async_auth_oidc(
             self_asserted_endpoint,
             policy_confirm_endpoint,
             timeout,
+            extra_auth_params,
         )
         if sub_value and login_data is not None:
             login_data["sub"] = sub_value
@@ -154,16 +157,16 @@ async def async_auth_oidc(
                     expires_in,
                 )
                 expires_in = 3600
-            access_token = tokens["access_token"]
+            access_token = str(tokens["access_token"])
+            id_token = str(tokens.get("id_token", ""))
 
-            # Extract sub claim from access token if login_data provided
             if login_data is not None and not login_data.get("sub"):
                 sub_value = _extract_sub_from_token(access_token)
                 if sub_value:
                     login_data["sub"] = sub_value
                     logger.debug("Extracted sub from access token: %s", sub_value)
 
-            return access_token, expires_in
+            return access_token, id_token, expires_in
         logger.error("Failed to obtain access token")
         raise CannotConnectError("Failed to obtain access token")
 
@@ -224,7 +227,28 @@ def _extract_sub_from_token(token: str) -> str | None:
 async def _get_config(
     session: aiohttp.ClientSession, base_url: str, tenant_id: str, policy: str, timeout: float
 ) -> ConfigDict:
-    """Get the configuration from the server."""
+    """
+    Retrieve the OpenID Connect discovery document for the given tenant
+    and policy and return it as a parsed ConfigDict.
+
+    Parameters:
+        session (aiohttp.ClientSession): HTTP session used to make the
+            request.
+        base_url (str): Base issuer URL.
+        tenant_id (str): Tenant identifier to include in the discovery
+            path.
+        policy (str): Policy name to include in the discovery path.
+        timeout (float): Request timeout in seconds.
+
+    Returns:
+        ConfigDict: Parsed OpenID configuration (e.g.,
+            `authorization_endpoint`, `issuer`, `token_endpoint`,
+            `jwks_uri`).
+
+    Raises:
+        CannotConnectError: If the HTTP response is not 200, the response
+            body is empty, or the response contains invalid JSON.
+    """
     config_url = f"{base_url}/{tenant_id}/{policy}/v2.0/.well-known/openid-configuration"
     logger.debug("Fetching OAuth configuration from: %s", config_url)
     config_text, _, status = await _fetch(session, config_url, timeout)
@@ -237,6 +261,53 @@ async def _get_config(
         logger.error("Invalid JSON in OpenID configuration response: %s", e)
         raise CannotConnectError(f"Invalid JSON in OpenID configuration response: {e}") from e
     return config
+
+
+async def _get_auth_silent(
+    session: aiohttp.ClientSession,
+    authorization_endpoint: str,
+    auth_params: dict[str, str],
+    redirect_uri: str,
+    config: ConfigDict,
+    client_id: str,
+    timeout: float,
+) -> tuple[str | None, str | None]:
+    """
+    Attempt silent OIDC authorization (when `prompt=none`) and extract the
+    authorization code and subject from the redirect Location header.
+
+    Performs a GET to the authorization endpoint with `allow_redirects=False`
+    to capture the Location header returned by the identity provider. If the
+    response is a redirect and the Location contains an authorization result,
+    extracts and returns the `(code, sub)` pair; otherwise returns
+    `(None, None)`.
+
+    Returns:
+        tuple[str | None, str | None]: `code` is the authorization code if
+        present, `sub` is the subject (user identifier) if available; both
+        are `None` on failure.
+    """
+    timeout_obj = aiohttp.ClientTimeout(total=timeout)
+    try:
+        async with session.get(
+            authorization_endpoint,
+            params=auth_params,
+            allow_redirects=False,
+            timeout=timeout_obj,
+        ) as resp:
+            status = resp.status
+            location = str(resp.headers.get("Location", ""))
+    except (TimeoutError, aiohttp.ClientError) as err:
+        raise CannotConnectError(f"Silent auth network error: {err}") from err
+
+    if status not in (301, 302, 303, 307, 308) or not location:
+        logger.warning(
+            "Silent auth: expected redirect, got status %d (location=%r)", status, location
+        )
+        return None, None
+
+    logger.debug("Silent auth redirect location: %s", location[:120])
+    return _extract_auth_result(location, redirect_uri, config, client_id)
 
 
 async def _get_auth(
@@ -252,8 +323,41 @@ async def _get_auth(
     self_asserted_endpoint: str,
     policy_confirm_endpoint: str,
     timeout: float,
+    extra_auth_params: dict[str, str] | None = None,
 ) -> tuple[str | None, str | None]:
-    """Get the authorization code."""
+    """
+    Obtain an OpenID Connect authorization code and the authenticated subject
+    ("sub") using either an interactive form flow or silent SSO.
+
+    Parameters:
+        session (aiohttp.ClientSession): HTTP session to perform requests.
+        config (ConfigDict): OIDC discovery configuration containing endpoints
+            (authorization_endpoint, issuer, etc.).
+        code_challenge (str): PKCE code challenge corresponding to the code
+            verifier.
+        username (str): Username to post for interactive sign-in.
+        password (str): Password to post for interactive sign-in.
+        client_id (str): OAuth client identifier.
+        redirect_uri (str): Registered redirect URI to validate returned
+            responses.
+        scope_auth (str): Scope string for the authorization request.
+        policy (str): B2C policy identifier used in credential and
+            confirmation endpoints.
+        self_asserted_endpoint (str): Relative endpoint (under the issuer
+            base) used to post credentials.
+        policy_confirm_endpoint (str): Relative endpoint used to confirm
+            sign-in and follow resulting redirects.
+        timeout (float): Total request timeout in seconds.
+        extra_auth_params (dict[str, str] | None): Additional query parameters
+            merged into the authorization request; when `{"prompt":"none"}` a
+            silent (no-redirect) SSO attempt is performed.
+
+    Returns:
+        tuple[str | None, str | None]: `(auth_code, sub)` where `auth_code`
+        is the authorization code if obtained, otherwise `None`, and `sub` is
+        the subject claim extracted from the ID token (or `None` if not
+        available or verification fails).
+    """
     auth_params = {
         "client_id": client_id,
         "response_type": "code",
@@ -262,6 +366,21 @@ async def _get_auth(
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
     }
+    if extra_auth_params:
+        auth_params.update(extra_auth_params)
+
+    if extra_auth_params and extra_auth_params.get("prompt") == "none":
+        logger.debug("Requesting authorization code (silent SSO)")
+        return await _get_auth_silent(
+            session,
+            config["authorization_endpoint"],
+            auth_params,
+            redirect_uri,
+            config,
+            client_id,
+            timeout,
+        )
+
     logger.debug("Requesting authorization code")
     auth_content, final_url, status = await _fetch(
         session, config["authorization_endpoint"], timeout, params=auth_params
@@ -346,7 +465,7 @@ async def _fetch(
             content = await response.text()
             logger.debug("Fetch completed. Status: %s", response.status)
             return content, str(response.url), response.status
-    except aiohttp.ClientError as err:
+    except (TimeoutError, aiohttp.ClientError) as err:
         logger.exception("Network error occurred")
         raise CannotConnectError("Network error occurred") from err
 

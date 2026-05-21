@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = "Apache-2.0"
 authors = [
-    { name = "Colin Haven", email = "colin@chmail.me"}
+    { name = "Colin Haven" }
     ]
 keywords = ["national-grid", "graphql", "aiohttp", "asyncio"]
 classifiers = [
