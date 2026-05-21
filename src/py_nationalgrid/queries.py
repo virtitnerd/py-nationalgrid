@@ -616,14 +616,18 @@ def collection_arrangements_request(
 ) -> GraphQLRequest:
     """
     Builds a collection arrangements GraphQL request for a given account.
-    
-    The provided `account_number` is embedded directly into the root field arguments (no GraphQL variables are sent). The returned request targets the collection arrangements endpoint.
-    
+
+    The provided `account_number` is embedded directly into the root field
+    arguments (no GraphQL variables are sent). The returned request
+    targets the collection arrangements endpoint.
+
     Parameters:
-        account_number (str): Account number to embed in the query root field.
-    
+        account_number (str): Account number to embed in the query root
+            field.
+
     Returns:
-        GraphQLRequest: A request object containing the composed query, variables (None), operation name, and endpoint.
+        GraphQLRequest: A request object containing the composed query,
+            variables (None), operation name, and endpoint.
     """
     return StandardQuery(
         operation_name=operation_name,
@@ -657,16 +661,25 @@ def premise_request(
 ) -> GraphQLRequest:
     """
     Builds a GraphQL request to look up a premise by address.
-    
-    Targets the premise-cu-uwp-gql endpoint (PREMISE_ENDPOINT) and does not require authentication.
-    
+
+    Targets the premise-cu-uwp-gql endpoint (PREMISE_ENDPOINT) and does
+    not require authentication.
+
     Parameters:
-    	variables (Mapping[str, Any] | None): Optional mapping of GraphQL variable values. Common keys: `apartment`, `city`, `state`, `streetName`, `zipCode`, `allowCrisAddresses`.
-    	variable_definitions (str | Sequence[str] | None): GraphQL variable definitions to include in the operation signature (defaults include definitions for the address fields and `allowCrisAddresses`).
-    	field_arguments (str | None): Arguments passed to the root `premise` field; by default this builds a `where` filter using the address variables and `allowCrisAddresses`.
-    
+        variables (Mapping[str, Any] | None): Optional mapping of GraphQL
+            variable values. Common keys: `apartment`, `city`, `state`,
+            `streetName`, `zipCode`, `allowCrisAddresses`.
+        variable_definitions (str | Sequence[str] | None): GraphQL
+            variable definitions to include in the operation signature
+            (defaults include definitions for the address fields and
+            `allowCrisAddresses`).
+        field_arguments (str | None): Arguments passed to the root
+            `premise` field; by default this builds a `where` filter
+            using the address variables and `allowCrisAddresses`.
+
     Returns:
-    	GraphQLRequest: The composed GraphQL request containing the query, variables, operation name, and endpoint.
+        GraphQLRequest: The composed GraphQL request containing the query,
+            variables, operation name, and endpoint.
     """
     return StandardQuery(
         operation_name=operation_name,
@@ -681,13 +694,19 @@ def premise_request(
 
 def _normalize_variable_definitions(value: str | Sequence[str] | None) -> str | None:
     """
-    Normalize GraphQL variable definition fragments into a single comma-separated declaration string.
-    
+    Normalize GraphQL variable definition fragments into a single
+    comma-separated declaration string.
+
     Parameters:
-        value (str | Sequence[str] | None): A variable definition, multiple definitions, or None. If a string, leading/trailing whitespace is removed. If a sequence, each item is stripped and empty items are ignored.
-    
+        value (str | Sequence[str] | None): A variable definition,
+            multiple definitions, or None. If a string, leading/trailing
+            whitespace is removed. If a sequence, each item is stripped
+            and empty items are ignored.
+
     Returns:
-        str | None: A single comma-separated string of cleaned variable definitions, or `None` when `value` is `None` or yields no non-empty definitions.
+        str | None: A single comma-separated string of cleaned variable
+            definitions, or `None` when `value` is `None` or yields no
+            non-empty definitions.
     """
     if value is None:
         return None

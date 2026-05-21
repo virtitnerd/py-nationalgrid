@@ -228,20 +228,26 @@ async def _get_config(
     session: aiohttp.ClientSession, base_url: str, tenant_id: str, policy: str, timeout: float
 ) -> ConfigDict:
     """
-    Retrieve the OpenID Connect discovery document for the given tenant and policy and return it as a parsed ConfigDict.
-    
+    Retrieve the OpenID Connect discovery document for the given tenant
+    and policy and return it as a parsed ConfigDict.
+
     Parameters:
-        session (aiohttp.ClientSession): HTTP session used to make the request.
+        session (aiohttp.ClientSession): HTTP session used to make the
+            request.
         base_url (str): Base issuer URL.
-        tenant_id (str): Tenant identifier to include in the discovery path.
+        tenant_id (str): Tenant identifier to include in the discovery
+            path.
         policy (str): Policy name to include in the discovery path.
         timeout (float): Request timeout in seconds.
-    
+
     Returns:
-        ConfigDict: Parsed OpenID configuration (e.g., `authorization_endpoint`, `issuer`, `token_endpoint`, `jwks_uri`).
-    
+        ConfigDict: Parsed OpenID configuration (e.g.,
+            `authorization_endpoint`, `issuer`, `token_endpoint`,
+            `jwks_uri`).
+
     Raises:
-        CannotConnectError: If the HTTP response is not 200, the response body is empty, or the response contains invalid JSON.
+        CannotConnectError: If the HTTP response is not 200, the response
+            body is empty, or the response contains invalid JSON.
     """
     config_url = f"{base_url}/{tenant_id}/{policy}/v2.0/.well-known/openid-configuration"
     logger.debug("Fetching OAuth configuration from: %s", config_url)
@@ -267,12 +273,19 @@ async def _get_auth_silent(
     timeout: float,
 ) -> tuple[str | None, str | None]:
     """
-    Attempt silent OIDC authorization (when `prompt=none`) and extract the authorization code and subject from the redirect Location header.
-    
-    Performs a GET to the authorization endpoint with `allow_redirects=False` to capture the Location header returned by the identity provider. If the response is a redirect and the Location contains an authorization result, extracts and returns the `(code, sub)` pair; otherwise returns `(None, None)`.
-    
+    Attempt silent OIDC authorization (when `prompt=none`) and extract the
+    authorization code and subject from the redirect Location header.
+
+    Performs a GET to the authorization endpoint with `allow_redirects=False`
+    to capture the Location header returned by the identity provider. If the
+    response is a redirect and the Location contains an authorization result,
+    extracts and returns the `(code, sub)` pair; otherwise returns
+    `(None, None)`.
+
     Returns:
-        tuple[str | None, str | None]: `code` is the authorization code if present, `sub` is the subject (user identifier) if available; both are `None` on failure.
+        tuple[str | None, str | None]: `code` is the authorization code if
+        present, `sub` is the subject (user identifier) if available; both
+        are `None` on failure.
     """
     timeout_obj = aiohttp.ClientTimeout(total=timeout)
     try:
@@ -313,25 +326,37 @@ async def _get_auth(
     extra_auth_params: dict[str, str] | None = None,
 ) -> tuple[str | None, str | None]:
     """
-    Obtain an OpenID Connect authorization code and the authenticated subject ("sub") using either an interactive form flow or silent SSO.
-    
+    Obtain an OpenID Connect authorization code and the authenticated subject
+    ("sub") using either an interactive form flow or silent SSO.
+
     Parameters:
         session (aiohttp.ClientSession): HTTP session to perform requests.
-        config (ConfigDict): OIDC discovery configuration containing endpoints (authorization_endpoint, issuer, etc.).
-        code_challenge (str): PKCE code challenge corresponding to the code verifier.
+        config (ConfigDict): OIDC discovery configuration containing endpoints
+            (authorization_endpoint, issuer, etc.).
+        code_challenge (str): PKCE code challenge corresponding to the code
+            verifier.
         username (str): Username to post for interactive sign-in.
         password (str): Password to post for interactive sign-in.
         client_id (str): OAuth client identifier.
-        redirect_uri (str): Registered redirect URI to validate returned responses.
+        redirect_uri (str): Registered redirect URI to validate returned
+            responses.
         scope_auth (str): Scope string for the authorization request.
-        policy (str): B2C policy identifier used in credential and confirmation endpoints.
-        self_asserted_endpoint (str): Relative endpoint (under the issuer base) used to post credentials.
-        policy_confirm_endpoint (str): Relative endpoint used to confirm sign-in and follow resulting redirects.
+        policy (str): B2C policy identifier used in credential and
+            confirmation endpoints.
+        self_asserted_endpoint (str): Relative endpoint (under the issuer
+            base) used to post credentials.
+        policy_confirm_endpoint (str): Relative endpoint used to confirm
+            sign-in and follow resulting redirects.
         timeout (float): Total request timeout in seconds.
-        extra_auth_params (dict[str, str] | None): Additional query parameters merged into the authorization request; when `{"prompt":"none"}` a silent (no-redirect) SSO attempt is performed.
-    
+        extra_auth_params (dict[str, str] | None): Additional query parameters
+            merged into the authorization request; when `{"prompt":"none"}` a
+            silent (no-redirect) SSO attempt is performed.
+
     Returns:
-        tuple[str | None, str | None]: `(auth_code, sub)` where `auth_code` is the authorization code if obtained, otherwise `None`, and `sub` is the subject claim extracted from the ID token (or `None` if not available or verification fails).
+        tuple[str | None, str | None]: `(auth_code, sub)` where `auth_code`
+        is the authorization code if obtained, otherwise `None`, and `sub` is
+        the subject claim extracted from the ID token (or `None` if not
+        available or verification fails).
     """
     auth_params = {
         "client_id": client_id,

@@ -42,15 +42,20 @@ class NationalGridAuth:
         timeout: float = 30.0,
     ) -> tuple[str, str, int] | tuple[None, None, None]:
         """
-        Authenticate against the National Grid consumer portal and obtain OAuth tokens.
-        
-        Performs the OIDC login flow for the consumer portal and returns the resulting access token, ID token, and expiration time in seconds.
-        
+        Authenticate against the National Grid consumer portal and
+        obtain OAuth tokens.
+
+        Performs the OIDC login flow for the consumer portal and returns
+        the resulting access token, ID token, and expiration time in
+        seconds.
+
         Parameters:
-            timeout (float): Request timeout in seconds for authentication requests (default: 30.0)
-        
+            timeout (float): Request timeout in seconds for
+                authentication requests (default: 30.0)
+
         Returns:
-            tuple: `(access_token, id_token, expires_in_seconds)` on success; `(None, None, None)` on failure.
+            tuple: `(access_token, id_token, expires_in_seconds)` on
+                success; `(None, None, None)` on failure.
         """
         logger.debug("Starting login process for National Grid")
         return await async_auth_oidc(
@@ -104,15 +109,25 @@ class NationalGridBusinessAuth:
         timeout: float = 30.0,
     ) -> tuple[str, str, int] | tuple[None, None, None]:
         """
-        Silently acquire a business-portal access token by reusing an existing B2C SSO session.
-        
-        The provided session (if not None) must already include the B2C authentication cookies from a consumer-portal login; this method requests authorization with `prompt=none` to perform a silent redirect that yields an authorization code without showing UI. On success the returned `id_token` will have its audience (`aud`) set to the business client identifier.
-        
+        Silently acquire a business-portal access token by reusing an
+        existing B2C SSO session.
+
+        The provided session (if not None) must already include the B2C
+        authentication cookies from a consumer-portal login; this method
+        requests authorization with `prompt=none` to perform a silent
+        redirect that yields an authorization code without showing UI. On
+        success the returned `id_token` will have its audience (`aud`)
+        set to the business client identifier.
+
         Parameters:
-            session (aiohttp.ClientSession | None): HTTP session that carries B2C cookies for silent SSO; may be `None` if cookie handling is not required.
-        
+            session (aiohttp.ClientSession | None): HTTP session that
+                carries B2C cookies for silent SSO; may be `None` if
+                cookie handling is not required.
+
         Returns:
-            tuple[str, str, int] or tuple[None, None, None]: `(access_token, id_token, expires_in_seconds)` on success, or `(None, None, None)` on failure.
+            tuple[str, str, int] or tuple[None, None, None]:
+                `(access_token, id_token, expires_in_seconds)` on
+                success, or `(None, None, None)` on failure.
         """
         logger.debug("Starting business portal silent SSO login")
         return await async_auth_oidc(

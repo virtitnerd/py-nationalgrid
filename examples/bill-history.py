@@ -46,9 +46,15 @@ def parse_args() -> argparse.Namespace:
 
 async def main() -> None:
     """
-    Run the example CLI: parse credentials, create a client session, resolve a billing account, and fetch and print electric and/or gas billing history.
-    
-    Prints a brief account summary and, for each available fuel type, up to 12 billing periods showing period range, number of days, metered usage (kWh or therms), utility and supplier charges, total charges, and average daily usage. If no linked accounts are found or a fuel type has no history, prints an explanatory message and returns.
+    Run the example CLI: parse credentials, create a client session,
+    resolve a billing account, and fetch and print electric and/or gas
+    billing history.
+
+    Prints a brief account summary and, for each available fuel type, up
+    to 12 billing periods showing period range, number of days, metered
+    usage (kWh or therms), utility and supplier charges, total charges,
+    and average daily usage. If no linked accounts are found or a fuel
+    type has no history, prints an explanatory message and returns.
     """
     args = parse_args()
     logging.basicConfig(
