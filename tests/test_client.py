@@ -256,14 +256,14 @@ async def test_session_uses_configured_connector(monkeypatch: pytest.MonkeyPatch
     ) -> tuple[str, str, int]:
         """
         Test helper that simulates an authentication login and returns fixed token values.
-        
+
         Parameters:
             session (aiohttp.ClientSession): HTTP session (ignored by this fake).
             username (str): Username provided for login (ignored by this fake).
             password (str): Password provided for login (ignored by this fake).
             login_data (LoginData): Additional login payload (ignored by this fake).
             timeout (float): Request timeout in seconds (ignored by this fake).
-        
+
         Returns:
             tuple[str, str, int]: A fixed `(access_token, id_token,
             expires_in_seconds)` tuple — always `("test-token", "id-tok",

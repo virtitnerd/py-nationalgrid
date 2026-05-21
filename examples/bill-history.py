@@ -21,13 +21,13 @@ from py_nationalgrid.helpers import create_cookie_jar
 def parse_args() -> argparse.Namespace:
     """
     Parse CLI arguments for the bill-history example script.
-    
+
     Supports the following command-line options:
       --username   National Grid username (required)
       --password   National Grid password (required)
       --account    Billing account number; if omitted, the first linked account is used
       --debug      Enable debug logging
-    
+
     Returns:
         argparse.Namespace: Parsed arguments with attributes `username` (str), `password` (str),
         `account` (str or None), and `debug` (bool).

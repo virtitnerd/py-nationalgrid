@@ -16,7 +16,7 @@ class NationalGridAuth:
     def timezone() -> str:
         """
         Timezone used by National Grid services.
-        
+
         Returns:
             timezone (str): IANA timezone string "America/New_York".
         """

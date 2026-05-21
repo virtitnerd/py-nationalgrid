@@ -203,7 +203,7 @@ async def test_401_clears_token_and_retries(monkeypatch: pytest.MonkeyPatch):
 async def test_graphql_error_includes_context(monkeypatch: pytest.MonkeyPatch):
     """
     Verify that a GraphQL error object contains request and HTTP context fields.
-    
+
     Asserts that executing a GraphQLRequest which results in an HTTP 404
     produces a GraphQLError (or a RetryExhaustedError wrapping one) whose
     `endpoint` and `query` are set, whose `variables` equal `{"id": "123"}`,
