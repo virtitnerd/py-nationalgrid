@@ -2173,7 +2173,12 @@ _PREMISE_NODE = {
 async def test_get_premise_returns_nodes(
     mock_session: MagicMock, config: NationalGridConfig
 ) -> None:
-    """get_premise returns parsed premise nodes including nested meter data."""
+    """
+    Verify that get_premise parses and returns premise nodes with nested meter data.
+    
+    Asserts the returned list contains premise fields (e.g., premiseNumber, premiseStatus, compressedAddress)
+    and that nested meter nodes include expected fields such as fuelType and meterNumber.
+    """
     mock_session.post.return_value = _DummyResponse(
         {"data": {"premise": {"nodes": [_PREMISE_NODE]}}}
     )
@@ -2652,11 +2657,22 @@ async def test_get_business_id_token_double_checked_lock_hit(
     # concurrent coroutine having refreshed the token while we waited).
     class _LockThatRefreshes:
         async def __aenter__(self) -> "_LockThatRefreshes":
+            """
+            Enter the async context and populate the client's cached business ID token and its expiry.
+            
+            Returns:
+                _LockThatRefreshes: The lock instance (`self`) after refreshing the client's cached business ID token.
+            """
             client._business_id_token = "concurrent-tok"
             client._business_token_expires_at = time.time() + 3600
             return self
 
         async def __aexit__(self, *args: object) -> None:
+            """
+            Async context manager exit hook that performs no action and does not suppress exceptions.
+            
+            This method allows instances to be used with "async with" and intentionally returns None so any exception raised inside the context is propagated.
+            """
             pass
 
     client._business_auth_lock = _LockThatRefreshes()  # type: ignore[assignment]

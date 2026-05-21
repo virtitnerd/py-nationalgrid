@@ -19,6 +19,19 @@ from py_nationalgrid.helpers import create_cookie_jar
 
 
 def parse_args() -> argparse.Namespace:
+    """
+    Parse CLI arguments for the bill-history example script.
+    
+    Supports the following command-line options:
+      --username   National Grid username (required)
+      --password   National Grid password (required)
+      --account    Billing account number; if omitted, the first linked account is used
+      --debug      Enable debug logging
+    
+    Returns:
+        argparse.Namespace: Parsed arguments with attributes `username` (str), `password` (str),
+        `account` (str or None), and `debug` (bool).
+    """
     parser = argparse.ArgumentParser(description="Fetch detailed billing history")
     parser.add_argument("--username", required=True, help="National Grid username")
     parser.add_argument("--password", required=True, help="National Grid password")
@@ -32,6 +45,11 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main() -> None:
+    """
+    Run the example CLI: parse credentials, create a client session, resolve a billing account, and fetch and print electric and/or gas billing history.
+    
+    Prints a brief account summary and, for each available fuel type, up to 12 billing periods showing period range, number of days, metered usage (kWh or therms), utility and supplier charges, total charges, and average daily usage. If no linked accounts are found or a fuel type has no history, prints an explanatory message and returns.
+    """
     args = parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.WARNING,

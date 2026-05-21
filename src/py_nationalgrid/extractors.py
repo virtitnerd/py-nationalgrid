@@ -508,17 +508,14 @@ def extract_payment_plans(response: GraphQLResponse) -> list[PaymentPlan]:
 
 
 def extract_collection_arrangements(response: GraphQLResponse) -> list[CollectionArrangement]:
-    """Extract collection arrangements from a GraphQL response.
-
-    Args:
-        response: The GraphQL response from a collection arrangements query
-
+    """
+    Extracts collection arrangement records from a GraphQL response.
+    
     Returns:
-        List of collection arrangements
-
+        list[CollectionArrangement]: The list of collection arrangements found at `data.collectionArrangements.nodes`.
+    
     Raises:
-        ValueError: If the response contains GraphQL errors
-        DataExtractionError: If the expected data path is missing
+        DataExtractionError: If `response.data` is missing or the expected fields (`collectionArrangements` or its `nodes`) are absent.
     """
     response.raise_on_errors()
 
@@ -545,17 +542,16 @@ def extract_collection_arrangements(response: GraphQLResponse) -> list[Collectio
 
 
 def extract_premise(response: GraphQLResponse) -> list[PremiseNode]:
-    """Extract premise nodes from a GraphQL response.
-
-    Args:
-        response: The GraphQL response from a premise lookup query
-
+    """
+    Extract premise nodes from a GraphQL response.
+    
+    Returns a list of nodes found at `response.data.premise.nodes`.
+    
     Returns:
-        List of premise nodes matching the address
-
+        list[PremiseNode]: The premise nodes extracted from the response.
+    
     Raises:
-        ValueError: If the response contains GraphQL errors
-        DataExtractionError: If the expected data path is missing
+        DataExtractionError: If `response.data` is null or if `premise` or `nodes` is missing from the response.
     """
     response.raise_on_errors()
 
@@ -582,16 +578,14 @@ def extract_premise(response: GraphQLResponse) -> list[PremiseNode]:
 
 
 def extract_electric_bill_history(response: RestResponse) -> list[ElectricBillRecord]:
-    """Extract electric bill history records from a business portal REST response.
-
-    Args:
-        response: The REST response from an ElectricBillHistory request
-
+    """
+    Extract electric bill history records from a business portal REST response.
+    
     Returns:
-        List of electric bill records, newest first. Empty list on 204 No Content.
-
+        List of electric bill records (newest first). Returns an empty list when the response status is 204 or the response data is falsy.
+    
     Raises:
-        DataExtractionError: If the response data is not in expected format
+        DataExtractionError: If the response data does not contain an 'electricBillHistory' list or if that value is not a list.
     """
     if response.status == 204 or not response.data:
         return []
@@ -648,16 +642,17 @@ def extract_gas_bill_history(response: RestResponse) -> list[GasBillRecord]:
 
 
 def extract_interval_reads(response: RestResponse) -> list[IntervalRead]:
-    """Extract interval reads from a REST response.
-
-    Args:
-        response: The REST response from a real-time meter info request
-
+    """
+    Extracts interval reads from a REST response.
+    
+    Parameters:
+        response: REST response from a real-time meter info request.
+    
     Returns:
-        List of interval reads
-
+        A list of interval read records.
+    
     Raises:
-        DataExtractionError: If the response data is not in expected format
+        DataExtractionError: If `response.data` is None or is not a list.
     """
     if response.data is None:
         raise DataExtractionError(

@@ -418,6 +418,12 @@ async def test_get_access_token_refreshes_when_expiring_soon(
     client._token_expires_at = time.time() + 100  # < 300s buffer → refresh
 
     async def _fake_login(self, sess, user, pw, login_data, timeout):
+        """
+        Return a fixed (access token, ID token, expires_in) tuple used by tests.
+        
+        Returns:
+            tuple: A 3-tuple (access_token, id_token, expires_in_seconds) where `access_token` is "new-token", `id_token` is "id-tok", and `expires_in_seconds` is 3600.
+        """
         return "new-token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
@@ -460,6 +466,12 @@ async def test_get_access_token_login_returns_none(monkeypatch: pytest.MonkeyPat
     client = NationalGridClient(config=config, session=session)
 
     async def _fake_login(self, sess, user, pw, login_data, timeout):
+        """
+        Test helper that simulates a failed authentication and produces no token data.
+        
+        @returns
+            `(None, None, None)` indicating no access token, no id token, and no expiry were obtained.
+        """
         return None, None, None
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
@@ -615,6 +627,12 @@ async def test_request_rest_401_clears_cached_token(monkeypatch: pytest.MonkeyPa
     session.request.return_value = _MockResponse({}, status=401, raise_on_status=True)
 
     async def _fake_login(self, sess, user, pw, login_data, timeout):
+        """
+        Return a fixed authentication tuple used for tests.
+        
+        Returns:
+            tuple: A 3-tuple (access_token, id_token, expires_in) where `access_token` is "tok", `id_token` is "id-tok", and `expires_in` is 3600.
+        """
         return "tok", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)

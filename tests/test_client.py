@@ -107,6 +107,16 @@ async def test_execute_merges_headers(monkeypatch: pytest.MonkeyPatch) -> None:
         login_data: LoginData,
         timeout: float,
     ) -> tuple[str, str, int]:
+        """
+        Test helper that simulates an OIDC login by asserting provided credentials and returning fixed token values.
+        
+        Parameters:
+            username (str): Expected to be "user@example.com"; an AssertionError is raised if it differs.
+            password (str): Expected to be "super-secret"; an AssertionError is raised if it differs.
+        
+        Returns:
+            tuple[str, str, int]: A 3-tuple of (access_token, id_token, expires_in_seconds), here ("token", "id-tok", 3600).
+        """
         assert username == "user@example.com"
         assert password == "super-secret"
         return "token", "id-tok", 3600
@@ -149,6 +159,12 @@ async def test_request_rest_uses_base_url(monkeypatch: pytest.MonkeyPatch) -> No
         login_data: LoginData,
         timeout: float,
     ) -> tuple[str, str, int]:
+        """
+        Test helper that simulates an OIDC login and returns a fixed access token, ID token, and expiry.
+        
+        Returns:
+            tuple[str, str, int]: A 3-tuple (access_token, id_token, expires_in_seconds) where `access_token` is "rest-token", `id_token` is "id-tok", and `expires_in_seconds` is 3600.
+        """
         return "rest-token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
@@ -185,6 +201,22 @@ async def test_execute_uses_oidc_token(monkeypatch: pytest.MonkeyPatch) -> None:
         login_data: LoginData,
         timeout: float,
     ) -> tuple[str, str, int]:
+        """
+        Test helper that validates credentials and returns a fixed (access_token, id_token, expires_in) tuple.
+        
+        Parameters:
+            session: aiohttp.ClientSession used by callers (not inspected).
+            username: Expected to be "user@example.com".
+            password: Expected to be "super-secret".
+            login_data: LoginData passed through by callers (not inspected).
+            timeout: Timeout value passed through by callers (not inspected).
+        
+        Returns:
+            tuple[str, str, int]: A 3-tuple (access_token, id_token, expires_in_seconds) — here ("oidc-token", "id-tok", 3600).
+        
+        Raises:
+            AssertionError: If `username` or `password` do not match the expected test values.
+        """
         assert username == "user@example.com"
         assert password == "super-secret"
         return "oidc-token", "id-tok", 3600
@@ -212,6 +244,19 @@ async def test_session_uses_configured_connector(monkeypatch: pytest.MonkeyPatch
         login_data: LoginData,
         timeout: float,
     ) -> tuple[str, str, int]:
+        """
+        Test helper that simulates an authentication login and returns fixed token values.
+        
+        Parameters:
+            session (aiohttp.ClientSession): HTTP session (ignored by this fake).
+            username (str): Username provided for login (ignored by this fake).
+            password (str): Password provided for login (ignored by this fake).
+            login_data (LoginData): Additional login payload (ignored by this fake).
+            timeout (float): Request timeout in seconds (ignored by this fake).
+        
+        Returns:
+            tuple[str, str, int]: A fixed `(access_token, id_token, expires_in_seconds)` tuple — always `("test-token", "id-tok", 3600)`.
+        """
         return "test-token", "id-tok", 3600
 
     monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _fake_login)
