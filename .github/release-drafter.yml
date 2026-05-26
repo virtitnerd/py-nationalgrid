@@ -97,12 +97,6 @@ version-resolver:
   default: patch
 
 template: |
+  [![PyPI Downloads](https://img.shields.io/pypi/dm/py-nationalgrid.svg)](https://pypi.org/project/py-nationalgrid/)
+
   $CHANGES
-
-  ---
-
-  [![PyPI Downloads](https://img.shields.io/pypi/dm/py-nationalgrid)](https://pypi.org/project/py-nationalgrid/)
-
-  ## Links
-  - [PyPI](https://pypi.org/project/py-nationalgrid/)
-  - [Submit bugs or feature requests](https://github.com/virtitnerd/py-nationalgrid/issues)
