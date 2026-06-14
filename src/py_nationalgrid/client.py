@@ -13,7 +13,13 @@ import aiohttp
 
 from .auth import NationalGridAuth, NationalGridBusinessAuth
 from .config import NationalGridConfig, RetryConfig
-from .exceptions import GraphQLError, RestAPIError, RetryExhaustedError
+from .exceptions import (
+    CannotConnectError,
+    GraphQLError,
+    InvalidAuthError,
+    RestAPIError,
+    RetryExhaustedError,
+)
 from .extractors import (
     extract_account_dashboard,
     extract_ami_energy_usages,
@@ -742,6 +748,8 @@ class NationalGridClient:
                     login_data,
                     timeout=self._config.timeout,
                 )
+            except (InvalidAuthError, CannotConnectError):
+                raise
             except Exception as err:
                 logger.error("Business portal silent SSO failed: %s", err)
                 return None
