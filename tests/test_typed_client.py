@@ -9,7 +9,13 @@ import pytest
 
 from py_nationalgrid.client import NationalGridClient
 from py_nationalgrid.config import NationalGridConfig
-from py_nationalgrid.exceptions import DataExtractionError, GraphQLError, RetryExhaustedError
+from py_nationalgrid.exceptions import (
+    CannotConnectError,
+    DataExtractionError,
+    GraphQLError,
+    InvalidAuthError,
+    RetryExhaustedError,
+)
 from py_nationalgrid.graphql import GraphQLResponse
 from py_nationalgrid.queries import (
     BALANCED_BILLING_ENDPOINT,
@@ -2597,6 +2603,32 @@ async def test_get_business_id_token_returns_none_when_login_returns_none(
 
     result = await client._get_business_id_token()
     assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc_cls",
+    [InvalidAuthError, CannotConnectError],
+)
+async def test_get_business_id_token_propagates_auth_and_connect_errors(
+    exc_cls: type,
+    mock_session: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """InvalidAuthError and CannotConnectError are re-raised, not swallowed."""
+    from py_nationalgrid.auth import NationalGridBusinessAuth
+
+    cfg = NationalGridConfig(username="u", password="p")
+    client = NationalGridClient(config=cfg, session=mock_session)
+    monkeypatch.setattr(client, "_get_access_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        NationalGridBusinessAuth,
+        "async_login",
+        AsyncMock(side_effect=exc_cls("test error")),
+    )
+
+    with pytest.raises(exc_cls):
+        await client._get_business_id_token()
 
 
 @pytest.mark.asyncio
