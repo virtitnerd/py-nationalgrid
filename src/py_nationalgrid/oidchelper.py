@@ -27,7 +27,7 @@ _jwks_clients: dict[str, PyJWKClient] = {}
 
 def _get_jwks_client(jwks_uri: str) -> PyJWKClient:
     if jwks_uri not in _jwks_clients:
-        _jwks_clients[jwks_uri] = PyJWKClient(jwks_uri)
+        _jwks_clients[jwks_uri] = PyJWKClient(jwks_uri, lifespan=3600)
     return _jwks_clients[jwks_uri]
 
 
