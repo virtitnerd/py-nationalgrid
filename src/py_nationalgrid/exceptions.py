@@ -58,7 +58,8 @@ class GraphQLError(NationalGridError):
             query_preview = self.query[:200] + "..." if len(self.query) > 200 else self.query
             parts.append(f"Query: {query_preview}")
         if self.variables:
-            parts.append(f"Variables: {self.variables}")
+            redacted = {k: "***" for k in self.variables}
+            parts.append(f"Variables: {redacted}")
         if self.original_error:
             parts.append(f"Caused by: {type(self.original_error).__name__}: {self.original_error}")
         return "\n".join(parts)

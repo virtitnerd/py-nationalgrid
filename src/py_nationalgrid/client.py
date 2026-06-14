@@ -13,7 +13,13 @@ import aiohttp
 
 from .auth import NationalGridAuth, NationalGridBusinessAuth
 from .config import NationalGridConfig, RetryConfig
-from .exceptions import GraphQLError, RestAPIError, RetryExhaustedError
+from .exceptions import (
+    CannotConnectError,
+    GraphQLError,
+    InvalidAuthError,
+    RestAPIError,
+    RetryExhaustedError,
+)
 from .extractors import (
     extract_account_dashboard,
     extract_ami_energy_usages,
@@ -713,8 +719,12 @@ class NationalGridClient:
 
         Returns:
             str | None: The business `id_token` if acquired or cached,
-                `None` if credentials are unavailable or the silent SSO
-                attempt fails.
+                `None` if credentials are unavailable or an unexpected
+                SSO error occurs.
+
+        Raises:
+            InvalidAuthError: If the business portal rejects the credentials.
+            CannotConnectError: If the business portal cannot be reached.
         """
         if self._business_id_token and self._business_token_expires_at:
             if time.time() < (self._business_token_expires_at - TOKEN_EXPIRY_BUFFER_SECONDS):
@@ -742,6 +752,8 @@ class NationalGridClient:
                     login_data,
                     timeout=self._config.timeout,
                 )
+            except (InvalidAuthError, CannotConnectError):
+                raise
             except Exception as err:
                 logger.error("Business portal silent SSO failed: %s", err)
                 return None
@@ -1733,6 +1745,8 @@ class NationalGridClient:
             List of electric bill records, newest first
 
         Raises:
+            InvalidAuthError: If the business portal rejects the credentials.
+            CannotConnectError: If the business portal cannot be reached.
             RestAPIError: When the REST request fails
             DataExtractionError: When the response is not in expected format
         """
@@ -1782,6 +1796,8 @@ class NationalGridClient:
             list[GasBillRecord]: Gas bill records ordered newest first.
 
         Raises:
+            InvalidAuthError: If the business portal rejects the credentials.
+            CannotConnectError: If the business portal cannot be reached.
             RestAPIError: If the REST request returns a non-2xx response.
             DataExtractionError: If the response payload cannot be parsed
                 into expected bill records.

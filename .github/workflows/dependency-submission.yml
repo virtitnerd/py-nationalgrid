@@ -12,17 +12,18 @@ jobs:
   dependency-submission:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
       - run: uv python install 3.13
       - run: uv sync
       - name: Component detection
-        uses: advanced-security/component-detection-dependency-submission-action@v0.1.1
+        uses: advanced-security/component-detection-dependency-submission-action@9c110eb34dee187cd9eca76a652b9f6a0ed22927 # v0.1.1
         with:
           # Experimental detectors: Poetry, UvLock, NpmLockfile3, Ivy
           # Default-off detectors: ConanLock, CondaLock, Dockerfile, Pip, SimplePip, Spdx22, SwiftResolved
           detectorArgs: UvLock=EnableIfDefaultOff
           detectorsFilter: UvLock
-          
