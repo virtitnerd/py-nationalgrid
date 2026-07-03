@@ -164,7 +164,7 @@ async def async_auth_oidc(
                 sub_value = _extract_sub_from_token(access_token)
                 if sub_value:
                     login_data["sub"] = sub_value
-                    logger.debug("Extracted sub from access token: %s", sub_value)
+                    logger.debug("Extracted sub from access token")
 
             return access_token, id_token, expires_in
         logger.error("Failed to obtain access token")
