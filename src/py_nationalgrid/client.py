@@ -434,6 +434,7 @@ class NationalGridClient:
         json: Any | None = None,
         headers: Mapping[str, str],
         timeout: float | None = None,
+        sent_id_token: str | None = None,
     ) -> RestResponse:
         """
         Send a REST request to the business portal using the provided
@@ -475,6 +476,12 @@ class NationalGridClient:
             try:
                 response.raise_for_status()
             except aiohttp.ClientResponseError as e:
+                if e.status == 401 and sent_id_token is not None:
+                    async with self._business_auth_lock:
+                        if self._business_id_token == sent_id_token:
+                            logger.info("Received 401, clearing cached business id_token")
+                            self._business_id_token = None
+                            self._business_token_expires_at = None
                 try:
                     response_text = await response.text()
                 except Exception:
@@ -1763,6 +1770,7 @@ class NationalGridClient:
             json=rest_request.json,
             headers=business_headers,
             timeout=timeout,
+            sent_id_token=id_token,
         )
         return extract_electric_bill_history(response)
 
@@ -1815,5 +1823,6 @@ class NationalGridClient:
             json=rest_request.json,
             headers=business_headers,
             timeout=timeout,
+            sent_id_token=id_token,
         )
         return extract_gas_bill_history(response)
