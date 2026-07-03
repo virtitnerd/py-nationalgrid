@@ -2445,6 +2445,93 @@ async def test_get_gas_bill_history_returns_empty_on_204(
 
 
 # ---------------------------------------------------------------------------
+# 401 retry — business portal call sites
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_electric_bill_history_retries_once_on_401(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first-attempt 401 triggers one re-auth retry that succeeds."""
+    from py_nationalgrid.exceptions import RestAPIError
+    from py_nationalgrid.rest import RestResponse
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "_get_business_id_token", AsyncMock(return_value="fresh-tok"))
+
+    err = RestAPIError("Unauthorized", url="https://x", method="POST", status=401)
+    ok = RestResponse(status=200, headers={}, data={"electricBillHistory": []})
+    mock_rest = AsyncMock(side_effect=[err, ok])
+    monkeypatch.setattr(client, "_request_business_rest", mock_rest)
+
+    records = await client.get_electric_bill_history("123", "456")
+    assert records == []
+    assert mock_rest.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_electric_bill_history_does_not_retry_second_401(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second consecutive 401 after the re-auth retry propagates as RestAPIError."""
+    from py_nationalgrid.exceptions import RestAPIError
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "_get_business_id_token", AsyncMock(return_value="tok"))
+
+    err = RestAPIError("Unauthorized", url="https://x", method="POST", status=401)
+    mock_rest = AsyncMock(side_effect=[err, err])
+    monkeypatch.setattr(client, "_request_business_rest", mock_rest)
+
+    with pytest.raises(RestAPIError) as exc_info:
+        await client.get_electric_bill_history("123", "456")
+    assert exc_info.value.status == 401
+    assert mock_rest.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_electric_bill_history_propagates_non_401_on_first_attempt(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-401 errors on the first attempt are propagated immediately without retry."""
+    from py_nationalgrid.exceptions import RestAPIError
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "_get_business_id_token", AsyncMock(return_value="tok"))
+
+    err = RestAPIError("Server Error", url="https://x", method="POST", status=500)
+    mock_rest = AsyncMock(side_effect=err)
+    monkeypatch.setattr(client, "_request_business_rest", mock_rest)
+
+    with pytest.raises(RestAPIError) as exc_info:
+        await client.get_electric_bill_history("123", "456")
+    assert exc_info.value.status == 500
+    assert mock_rest.call_count == 1  # no retry on non-401
+
+
+@pytest.mark.asyncio
+async def test_get_gas_bill_history_retries_once_on_401(
+    mock_session: MagicMock, config: NationalGridConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first-attempt 401 triggers one re-auth retry that succeeds (gas variant)."""
+    from py_nationalgrid.exceptions import RestAPIError
+    from py_nationalgrid.rest import RestResponse
+
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "_get_business_id_token", AsyncMock(return_value="fresh-tok"))
+
+    err = RestAPIError("Unauthorized", url="https://x", method="POST", status=401)
+    ok = RestResponse(status=200, headers={}, data={"gasBillHistory": []})
+    mock_rest = AsyncMock(side_effect=[err, ok])
+    monkeypatch.setattr(client, "_request_business_rest", mock_rest)
+
+    records = await client.get_gas_bill_history("123", "456")
+    assert records == []
+    assert mock_rest.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # _request_business_rest — error path
 # ---------------------------------------------------------------------------
 
@@ -2531,6 +2618,39 @@ async def test_request_business_rest_handles_text_read_failure(
         )
     assert exc_info.value.status == 500
     assert exc_info.value.response_text is None
+
+
+@pytest.mark.asyncio
+async def test_request_business_rest_clears_token_on_401_when_sent_token_matches(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """On 401, the cached token is cleared only when sent_id_token matches the cache."""
+    from py_nationalgrid.exceptions import RestAPIError
+
+    err = aiohttp.ClientResponseError(
+        request_info=MagicMock(), history=(), status=401, message="Unauthorized"
+    )
+
+    mock_response = MagicMock()
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=False)
+    mock_response.raise_for_status = MagicMock(side_effect=err)
+    mock_response.text = AsyncMock(return_value="Unauthorized")
+    mock_session.request = MagicMock(return_value=mock_response)
+
+    client = NationalGridClient(config=config, session=mock_session)
+    client._business_id_token = "stale-tok"  # prime the cache
+
+    with pytest.raises(RestAPIError):
+        await client._request_business_rest(
+            "POST",
+            "https://example.com/api",
+            headers={"Authorization": "Bearer stale-tok"},
+            sent_id_token="stale-tok",
+        )
+
+    # Token must have been cleared because sent_id_token matched.
+    assert client._business_id_token is None
 
 
 # ---------------------------------------------------------------------------
