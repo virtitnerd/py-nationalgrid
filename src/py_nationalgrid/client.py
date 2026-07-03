@@ -76,7 +76,7 @@ from .queries import (
     payments_request,
     premise_request,
 )
-from .rest import RestResponse
+from .rest import RestRequest, RestResponse
 from .rest_queries import (
     BUSINESS_SUBSCRIPTION_KEY,
     electric_bill_history_request,
@@ -434,6 +434,7 @@ class NationalGridClient:
         json: Any | None = None,
         headers: Mapping[str, str],
         timeout: float | None = None,
+        sent_id_token: str | None = None,
     ) -> RestResponse:
         """
         Send a REST request to the business portal using the provided
@@ -475,6 +476,12 @@ class NationalGridClient:
             try:
                 response.raise_for_status()
             except aiohttp.ClientResponseError as e:
+                if e.status == 401 and sent_id_token is not None:
+                    async with self._business_auth_lock:
+                        if self._business_id_token == sent_id_token:
+                            logger.info("Received 401, clearing cached business id_token")
+                            self._business_id_token = None
+                            self._business_token_expires_at = None
                 try:
                     response_text = await response.text()
                 except Exception:
@@ -494,6 +501,46 @@ class NationalGridClient:
                 headers=dict(response.headers),
                 data=payload,
             )
+
+    async def _request_business_rest_with_retry(
+        self,
+        rest_request: RestRequest,
+        *,
+        timeout: float | None = None,
+    ) -> RestResponse:
+        """Send a business-portal REST request with one transparent 401 re-auth retry.
+
+        On a first-attempt 401, ``_request_business_rest`` has already cleared
+        the cached token. A fresh token is then obtained before the second
+        attempt. If the second attempt also returns 401 the ``RestAPIError`` is
+        propagated to the caller.
+        """
+        id_token = await self._get_business_id_token()
+        headers = self._build_business_headers(id_token or "")
+        try:
+            return await self._request_business_rest(
+                rest_request.method,
+                rest_request.path_or_url,
+                json=rest_request.json,
+                headers=headers,
+                timeout=timeout,
+                sent_id_token=id_token,
+            )
+        except RestAPIError as e:
+            if e.status != 401:
+                raise
+            logger.info("Business portal 401 on first attempt — retrying with fresh token")
+
+        id_token = await self._get_business_id_token()
+        headers = self._build_business_headers(id_token or "")
+        return await self._request_business_rest(
+            rest_request.method,
+            rest_request.path_or_url,
+            json=rest_request.json,
+            headers=headers,
+            timeout=timeout,
+            sent_id_token=id_token,
+        )
 
     async def request_rest(
         self,
@@ -1750,20 +1797,12 @@ class NationalGridClient:
             RestAPIError: When the REST request fails
             DataExtractionError: When the response is not in expected format
         """
-        id_token = await self._get_business_id_token()
         rest_request = electric_bill_history_request(
             account_number=account_number,
             customer_number=customer_number,
             is_pal=is_pal,
         )
-        business_headers = self._build_business_headers(id_token or "")
-        response = await self._request_business_rest(
-            rest_request.method,
-            rest_request.path_or_url,
-            json=rest_request.json,
-            headers=business_headers,
-            timeout=timeout,
-        )
+        response = await self._request_business_rest_with_retry(rest_request, timeout=timeout)
         return extract_electric_bill_history(response)
 
     async def get_gas_bill_history(
@@ -1802,18 +1841,10 @@ class NationalGridClient:
             DataExtractionError: If the response payload cannot be parsed
                 into expected bill records.
         """
-        id_token = await self._get_business_id_token()
         rest_request = gas_bill_history_request(
             account_number=account_number,
             customer_number=customer_number,
             is_pal=is_pal,
         )
-        business_headers = self._build_business_headers(id_token or "")
-        response = await self._request_business_rest(
-            rest_request.method,
-            rest_request.path_or_url,
-            json=rest_request.json,
-            headers=business_headers,
-            timeout=timeout,
-        )
+        response = await self._request_business_rest_with_retry(rest_request, timeout=timeout)
         return extract_gas_bill_history(response)

@@ -101,13 +101,7 @@ class RestAPIError(NationalGridError):
         if self.status is not None:
             parts.append(f"Status: {self.status}")
         if self.response_text:
-            # Truncate long responses
-            text_preview = (
-                self.response_text[:500] + "..."
-                if len(self.response_text) > 500
-                else self.response_text
-            )
-            parts.append(f"Response: {text_preview}")
+            parts.append("Response: [redacted]")
         if self.original_error:
             parts.append(f"Caused by: {type(self.original_error).__name__}: {self.original_error}")
         return "\n".join(parts)
