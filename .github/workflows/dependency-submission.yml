@@ -21,6 +21,7 @@ jobs:
       - run: uv python install 3.13
       - run: uv sync
       - name: Component detection
+        continue-on-error: true
         uses: advanced-security/component-detection-dependency-submission-action@9c110eb34dee187cd9eca76a652b9f6a0ed22927 # v0.1.1
         with:
           # Experimental detectors: Poetry, UvLock, NpmLockfile3, Ivy
