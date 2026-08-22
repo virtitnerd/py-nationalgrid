@@ -20,6 +20,7 @@ from .models import (
     GasBillRecord,
     IntervalRead,
     MeterReading,
+    NrtEnergyUsage,
     PaperlessBilling,
     Payment,
     PaymentPlan,
@@ -237,6 +238,47 @@ def extract_ami_energy_usages(
         )
 
     return cast(list[AmiEnergyUsage], nodes)
+
+
+def extract_nrt_energy_usages(response: GraphQLResponse) -> list[NrtEnergyUsage]:
+    """Extract near-real-time energy usages from a GraphQL response.
+
+    Args:
+        response: The GraphQL response from an NRT energy usages query
+
+    Returns:
+        List of near-real-time energy usages
+
+    Raises:
+        ValueError: If the response contains GraphQL errors
+        DataExtractionError: If the expected data path is missing
+    """
+    response.raise_on_errors()
+
+    if response.data is None:
+        raise DataExtractionError(
+            "Response data is null",
+            path="data",
+            response_data=None,
+        )
+
+    nrt_energy_usages = response.data.get("nrtEnergyUsages")
+    if nrt_energy_usages is None:
+        raise DataExtractionError(
+            "Missing 'nrtEnergyUsages' field in response",
+            path="data.nrtEnergyUsages",
+            response_data=response.data,
+        )
+
+    nodes = nrt_energy_usages.get("nodes")
+    if nodes is None:
+        raise DataExtractionError(
+            "Missing 'nodes' field in nrtEnergyUsages",
+            path="data.nrtEnergyUsages.nodes",
+            response_data=response.data,
+        )
+
+    return cast(list[NrtEnergyUsage], nodes)
 
 
 def extract_bills(response: GraphQLResponse) -> list[Bill]:

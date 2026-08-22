@@ -34,6 +34,7 @@ from .extractors import (
     extract_interval_reads,
     extract_linked_accounts,
     extract_meter_reading,
+    extract_nrt_energy_usages,
     extract_paperless_billing,
     extract_payment_plans,
     extract_payments,
@@ -54,6 +55,7 @@ from .models import (
     GasBillRecord,
     IntervalRead,
     MeterReading,
+    NrtEnergyUsage,
     PaperlessBilling,
     Payment,
     PaymentPlan,
@@ -71,6 +73,7 @@ from .queries import (
     energy_usages_request,
     linked_billing_accounts_request,
     meter_reading_request,
+    nrt_energy_usages_request,
     paperless_billing_request,
     payment_plans_request,
     payments_request,
@@ -1658,6 +1661,50 @@ class NationalGridClient:
         # Restore chronological order: we iterated newest-first, so reverse the
         # chunk list before flattening. Records within each chunk keep API order.
         return [r for chunk in reversed(chunk_results) for r in chunk]
+
+    async def get_nrt_energy_usages(
+        self,
+        premise_number: str | int,
+        service_point_number: str | int,
+        start_datetime: datetime | str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> list[NrtEnergyUsage]:
+        """Get near-real-time energy usage data.
+
+        Targets ``nrtEnergyUsages`` on the energyusage-cu-uwp-gql endpoint —
+        this is what the National Grid web portal itself uses to render
+        the Real-Time Usage. This returns data from ``start_datetime`` through the present.
+
+        Args:
+            premise_number: The premise number (auto-converts int to str)
+            service_point_number: The service point number (auto-converts int to str)
+            start_datetime: Start datetime (datetime object or "YYYY-MM-DD HH:MM:SS" string)
+            headers: Additional headers to include
+            timeout: Request timeout in seconds
+
+        Returns:
+            List of near-real-time energy usages
+
+        Raises:
+            GraphQLError: When the GraphQL request fails
+            DataExtractionError: When the expected data path is missing
+        """
+        if isinstance(start_datetime, datetime):
+            datetime_str = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            datetime_str = start_datetime
+
+        request = nrt_energy_usages_request(
+            variables={
+                "premiseNumber": str(premise_number),
+                "servicePointNumber": str(service_point_number),
+                "startDateTime": datetime_str,
+            },
+        )
+        response = await self.execute(request, headers=headers, timeout=timeout)
+        return extract_nrt_energy_usages(response)
 
     async def get_interval_reads(
         self,

@@ -211,6 +211,35 @@ class AmiEnergyUsagesConnection(TypedDict):
     nodes: list[AmiEnergyUsage]
 
 
+class NrtEnergyUsage(TypedDict):
+    """Near-real-time energy usage data.
+
+    This seems to be a replacement for the amiEnergyUsages15Min which covers the current
+    day — the AMI endpoints typically lag a day behind.
+
+    Attributes:
+        date: Date of usage in YYYY-MM-DD format
+        timeFrom: Start of the interval in HH:MM:SS format
+        timeTo: End of the interval in HH:MM:SS format
+        quantity: Energy usage quantity for the interval
+    """
+
+    date: str
+    timeFrom: str
+    timeTo: str
+    quantity: float
+
+
+class NrtEnergyUsagesConnection(TypedDict):
+    """Connection type for near-real-time energy usages.
+
+    Attributes:
+        nodes: List of near-real-time energy usage records
+    """
+
+    nodes: list[NrtEnergyUsage]
+
+
 # Bills (bill-cu-uwp-gql)
 class Bill(TypedDict):
     """A billing statement.
