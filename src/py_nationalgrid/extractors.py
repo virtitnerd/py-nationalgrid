@@ -1,5 +1,7 @@
 """Data extraction helpers for converting raw responses to typed models."""
 
+from datetime import datetime, timedelta
+from datetime import time as dt_time
 from typing import cast
 
 from .exceptions import DataExtractionError
@@ -279,6 +281,48 @@ def extract_nrt_energy_usages(response: GraphQLResponse) -> list[NrtEnergyUsage]
         )
 
     return cast(list[NrtEnergyUsage], nodes)
+
+
+def extract_interval_reads(response: GraphQLResponse) -> list[IntervalRead]:
+    """Extract real-time meter interval reads from a GraphQL response.
+
+    Converts the raw ``nrtEnergyUsages`` nodes into the ``startTime``/``endTime``/
+    ``value`` shape of the legacy REST interval-reads endpoint. ``date`` is
+    the ISO 8601 of the `time_to` timestamp — its calendar date is already rolled
+    forward on intervals that cross midnight (e.g. ``timeFrom="23:45"``,
+    ``timeTo="00:00"`` pairs with a `date` dated the next day). ``start``
+    is derived by swapping in ``timeFrom``'s clock time on the same date as
+    ``end``, then rolled back a day if that lands after ``end``.
+
+    Args:
+        response: The GraphQL response from an NRT energy usages query
+
+    Returns:
+        List of interval reads
+
+    Raises:
+        ValueError: If the response contains GraphQL errors
+        DataExtractionError: If the expected data path is missing
+    """
+    nodes = extract_nrt_energy_usages(response)
+
+    interval_reads: list[IntervalRead] = []
+    for node in nodes:
+        end = datetime.fromisoformat(node["date"])
+        start = datetime.combine(
+            end.date(), dt_time.fromisoformat(node["timeFrom"]), tzinfo=end.tzinfo
+        )
+        if start > end:
+            # Interval crosses midnight: timeFrom belongs to the day before `date`.
+            start -= timedelta(days=1)
+        interval_reads.append(
+            IntervalRead(
+                startTime=start.isoformat(),
+                endTime=end.isoformat(),
+                value=node["quantity"],
+            )
+        )
+    return interval_reads
 
 
 def extract_bills(response: GraphQLResponse) -> list[Bill]:
@@ -689,34 +733,3 @@ def extract_gas_bill_history(response: RestResponse) -> list[GasBillRecord]:
         )
 
     return cast(list[GasBillRecord], records)
-
-
-def extract_interval_reads(response: RestResponse) -> list[IntervalRead]:
-    """
-    Extracts interval reads from a REST response.
-
-    Parameters:
-        response: REST response from a real-time meter info request.
-
-    Returns:
-        A list of interval read records.
-
-    Raises:
-        DataExtractionError: If `response.data` is None or is not a
-            list.
-    """
-    if response.data is None:
-        raise DataExtractionError(
-            "Response data is null",
-            path="data",
-            response_data=None,
-        )
-
-    if not isinstance(response.data, list):
-        raise DataExtractionError(
-            "Expected list of interval reads",
-            path="data",
-            response_data=response.data,
-        )
-
-    return cast(list[IntervalRead], response.data)

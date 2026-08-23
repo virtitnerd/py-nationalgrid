@@ -117,7 +117,7 @@ The public API consists of typed `get_*` methods on `NationalGridClient`:
 - `get_energy_usages()` → `list[EnergyUsage]`
 - `get_ami_energy_usages()` → `list[AmiEnergyUsage]` — **primary AMI method**; tries `NrtDailyUsage` first, falls back to `get_ami_energy_usages_15min()` on failure; see section below
 - `get_ami_energy_usages_15min()` → `list[AmiEnergyUsage]` — explicit 15-min endpoint with automatic chunking; use directly when you need 15-min granularity specifically
-- `get_interval_reads()` → `list[IntervalRead]` — returns `[]` on 404 (GAS meters with no interval data)
+- `get_interval_reads()` → `list[IntervalRead]` — near-real-time interval usage from `start_datetime` through the present, via the `nrtEnergyUsages` GraphQL endpoint (the same one the web portal uses for "Real-Time Usage"); the raw `date`/`timeFrom`/`timeTo`/`quantity` nodes are converted to the legacy `startTime`/`endTime`/`value` shape. `date` is already the interval's full ISO 8601 *end* timestamp — its clock time always equals `timeTo`, and its calendar date is already rolled forward on intervals that cross midnight; `startTime` is derived by placing `timeFrom` on that same date, rolling back a day if that lands after `date`. No timezone is assumed client-side — the offset comes straight from the API
 - `get_premise()` → `list[PremiseNode]` — **public endpoint, no auth required**; looks up premise number and meter nodes by address (`city`, `state`, `street_name`, `zip_code`)
 - `get_electric_bill_history(account_number, customer_number)` → `list[ElectricBillRecord]` — **business portal**; per-billing-period electric data with utility/supplier charge breakdown and demand fields; `customer_number` from `get_billing_account()`
 - `get_gas_bill_history(account_number, customer_number)` → `list[GasBillRecord]` — **business portal**; per-billing-period gas data with utility/supplier charge breakdown; `customer_number` from `get_billing_account()`
@@ -148,10 +148,10 @@ The method automatically splits any date range into chunks and concatenates resu
 
 ```python
 # Constants in client.py
-AMI_CHUNK_DAYS_ELECTRIC = 60   # 96 records/day × 60 = 5,760 (inside 10k cap)
-AMI_CHUNK_DAYS_GAS      = 60   # 24 records/day × 60 = 1,440
-AMI_CHUNK_DAYS_DEFAULT  = 60   # fallback when fuel_type is unknown
-AMI_CHUNK_FALLBACK_DAYS = 45   # retry window when a 60-day chunk times out
+AMI_CHUNK_DAYS_ELECTRIC = 60  # 96 records/day × 60 = 5,760 (inside 10k cap)
+AMI_CHUNK_DAYS_GAS = 60  # 24 records/day × 60 = 1,440
+AMI_CHUNK_DAYS_DEFAULT = 60  # fallback when fuel_type is unknown
+AMI_CHUNK_FALLBACK_DAYS = 45  # retry window when a 60-day chunk times out
 ```
 
 Chunks are built oldest-to-newest and then **reversed** before iteration so that the newest chunk is always requested first. This guarantees recent data is collected before any older chunk might hit the cold-storage boundary.

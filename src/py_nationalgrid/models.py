@@ -212,15 +212,15 @@ class AmiEnergyUsagesConnection(TypedDict):
 
 
 class NrtEnergyUsage(TypedDict):
-    """Near-real-time energy usage data.
-
-    This seems to be a replacement for the amiEnergyUsages15Min which covers the current
-    day — the AMI endpoints typically lag a day behind.
+    """Real-time meter interval read data (15-minute intervals).
 
     Attributes:
-        date: Date of usage in YYYY-MM-DD format
-        timeFrom: Start of the interval in HH:MM:SS format
-        timeTo: End of the interval in HH:MM:SS format
+        date: ISO 8601 timestamp equal to the interval's own `timeTo`, with the calendar date
+              already rolled forward on intervals that cross midnight
+              (e.g. "2026-08-23T00:00:00.000-04:00" for a
+              timeFrom="23:45"/timeTo="00:00" interval on 2026-08-22)
+        timeFrom: Start of the interval, HH:MM
+        timeTo: End of the interval, HH:MM
         quantity: Energy usage quantity for the interval
     """
 

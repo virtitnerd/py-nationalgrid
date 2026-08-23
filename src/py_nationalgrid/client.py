@@ -34,7 +34,6 @@ from .extractors import (
     extract_interval_reads,
     extract_linked_accounts,
     extract_meter_reading,
-    extract_nrt_energy_usages,
     extract_paperless_billing,
     extract_payment_plans,
     extract_payments,
@@ -55,7 +54,6 @@ from .models import (
     GasBillRecord,
     IntervalRead,
     MeterReading,
-    NrtEnergyUsage,
     PaperlessBilling,
     Payment,
     PaymentPlan,
@@ -84,7 +82,6 @@ from .rest_queries import (
     BUSINESS_SUBSCRIPTION_KEY,
     electric_bill_history_request,
     gas_bill_history_request,
-    realtime_meter_info_request,
 )
 
 logger = logging.getLogger(__name__)
@@ -1662,7 +1659,7 @@ class NationalGridClient:
         # chunk list before flattening. Records within each chunk keep API order.
         return [r for chunk in reversed(chunk_results) for r in chunk]
 
-    async def get_nrt_energy_usages(
+    async def get_interval_reads(
         self,
         premise_number: str | int,
         service_point_number: str | int,
@@ -1670,12 +1667,14 @@ class NationalGridClient:
         *,
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
-    ) -> list[NrtEnergyUsage]:
-        """Get near-real-time energy usage data.
+    ) -> list[IntervalRead]:
+        """Get near-real-time meter interval reads.
 
         Targets ``nrtEnergyUsages`` on the energyusage-cu-uwp-gql endpoint —
         this is what the National Grid web portal itself uses to render
-        the Real-Time Usage. This returns data from ``start_datetime`` through the present.
+        the Real-Time Usage. This returns data from ``start_datetime`` through
+        the present, converted to the ``startTime``/``endTime``/``value``
+        of the legacy REST interval-reads endpoint to serve as a drop-in replacement.
 
         Args:
             premise_number: The premise number (auto-converts int to str)
@@ -1704,63 +1703,6 @@ class NationalGridClient:
             },
         )
         response = await self.execute(request, headers=headers, timeout=timeout)
-        return extract_nrt_energy_usages(response)
-
-    async def get_interval_reads(
-        self,
-        premise_number: str | int,
-        service_point_number: str | int,
-        start_datetime: datetime | str,
-        *,
-        headers: Mapping[str, str] | None = None,
-        timeout: float | None = None,
-    ) -> list[IntervalRead]:
-        """Get real-time meter interval reads with typed response.
-
-        Args:
-            premise_number: The premise number (auto-converts int to str)
-            service_point_number: The service point number (auto-converts int to str)
-            start_datetime: Start datetime (datetime object or "YYYY-MM-DD HH:MM:SS" string)
-            headers: Additional headers to include
-            timeout: Request timeout in seconds
-
-        Returns:
-            List of interval reads
-
-        Raises:
-            RestAPIError: When the REST request fails
-            DataExtractionError: When the response is not in expected format
-        """
-        premise_str = str(premise_number)
-        service_point_str = str(service_point_number)
-
-        if isinstance(start_datetime, datetime):
-            datetime_str = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            datetime_str = start_datetime
-
-        rest_request = realtime_meter_info_request(
-            premise_number=premise_str,
-            service_point_number=service_point_str,
-            start_datetime=datetime_str,
-            headers=headers,
-        )
-        try:
-            response = await self.request_rest(
-                rest_request.method,
-                rest_request.path_or_url,
-                params=rest_request.params,
-                json=rest_request.json,
-                data=rest_request.data,
-                headers=rest_request.headers,
-                timeout=timeout,
-            )
-        except RestAPIError as e:
-            if e.status == 404:
-                # The NRT API returns 404 when a service point has no interval reads
-                # (e.g. GAS meters). Treat as empty — consistent with other get_* methods.
-                return []
-            raise
         return extract_interval_reads(response)
 
     async def get_premise(

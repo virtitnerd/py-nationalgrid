@@ -16,6 +16,7 @@ pip install py-nationalgrid
 import asyncio
 from py_nationalgrid import NationalGridClient, NationalGridConfig
 
+
 async def main() -> None:
     config = NationalGridConfig(
         username="user@example.com",
@@ -32,13 +33,18 @@ async def main() -> None:
             # Single call: balance, autopay, paperless, scheduled payments, recent bills
             dashboard = await client.get_account_dashboard(acct_id)
             print(f"  Balance: ${dashboard['currentBalance']:.2f}")
-            print(f"  Paperless: {dashboard['paperlessBilling']['status'] if dashboard['paperlessBilling'] else 'N/A'}")
-            print(f"  Autopay: {'enrolled' if dashboard['isEnrolledInRecurringPay'] else 'not enrolled'}")
+            print(
+                f"  Paperless: {dashboard['paperlessBilling']['status'] if dashboard['paperlessBilling'] else 'N/A'}"
+            )
+            print(
+                f"  Autopay: {'enrolled' if dashboard['isEnrolledInRecurringPay'] else 'not enrolled'}"
+            )
             for bill in dashboard["recentBills"]:
                 print(
                     f"  {bill['statementDate']}  due {bill['dueDate']}  "
                     f"${bill['totalDueAmount']:.2f}"
                 )
+
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -55,7 +61,6 @@ if __name__ == "__main__":
 | `get_energy_usages(...)` | `list[EnergyUsage]` | Monthly historical usage data                                                                                                                                                                                                          |
 | `get_ami_energy_usages(...)` | `list[AmiEnergyUsage]` | **Primary AMI method.** Tries the daily `NrtDailyUsage` endpoint first (no chunking required). Falls back to `get_ami_energy_usages_15min()` automatically on GraphQL errors or 504. See below.                                        |
 | `get_ami_energy_usages_15min(...)` | `list[AmiEnergyUsage]` | AMI 15-minute interval data. Call directly only when you specifically need 15-minute granularity. Auto-chunks large ranges, falls back to daily on API errors, and handles the ~45-day hot storage limit gracefully.                   |
-| `get_nrt_energy_usages(...)` | `list[NrtEnergyUsage]` | Near-real-time interval usage from `start_datetime` through the present — what the web portal uses to render "Real-Time Usage". Fills in the current day. Possible replacement for `get_ami_energy_usages_15min()` |
 | `get_payment_history(account_number)` | `list[Payment]` | Payment history — payment date, amount, status, method, and error info                                                                                                                                                                 |
 | `get_account_dashboard(account_number)` | `AccountDashboard` | Account summary — balance, autopay/paperless status, scheduled payments, and recent bills in one call                                                                                                                                  |
 | `get_paperless_billing(account_number)` | `PaperlessBilling \| None` | Paperless billing enrollment status                                                                                                                                                                                                    |
@@ -63,7 +68,7 @@ if __name__ == "__main__":
 | `get_payment_plans(account_number)` | `list[PaymentPlan]` | Active payment plans — installment amounts, counts, and status                                                                                                                                                                         |
 | `get_collection_arrangements(account_number)` | `list[CollectionArrangement]` | Collection arrangements — total due, installment schedule, and status                                                                                                                                                                  |
 | `get_meter_reading(account_number)` | `MeterReading \| None` | Current meter read eligibility and last submitted reading                                                                                                                                                                              |
-| `get_interval_reads(...)` | `list[IntervalRead]` | Real-time meter interval reads. Returns `[]` for meters with no interval data (e.g. GAS).                                                                                                                                              |
+| `get_interval_reads(...)` | `list[IntervalRead]` | Near-real-time meter interval reads from `start_datetime` through the present.                                                                                                                                                          |
 | `get_premise(...)` | `list[PremiseNode]` | Look up premise number and meter info by address. Does not require authentication.                                                                                                                                                     |
 | `get_electric_bill_history(account_number, customer_number)` | `list[ElectricBillRecord]` | Per-billing-period electric data: utility/supplier charge breakdown, total kWh, avg daily usage, and demand fields (TOU, peak kW). More detail than `get_bills()`.                                                                     |
 | `get_gas_bill_history(account_number, customer_number)` | `list[GasBillRecord]` | Per-billing-period gas data: utility/supplier charge breakdown, total therms, avg daily usage. More detail than `get_bills()`.                                                                                                         |
@@ -79,7 +84,7 @@ This is the recommended entry point for AMI data. It sends a single full-range r
 ```python
 from datetime import date, timedelta
 
-date_to   = date.today()
+date_to = date.today()
 date_from = date_to - timedelta(days=60)
 
 usages = await client.get_ami_energy_usages(
@@ -89,7 +94,7 @@ usages = await client.get_ami_energy_usages(
     meter_point_number=meter["meterPointNumber"],
     date_from=date_from,
     date_to=date_to,
-    fuel_type=meter.get("fuelType"),   # forwarded to the fallback path if triggered
+    fuel_type=meter.get("fuelType"),  # forwarded to the fallback path if triggered
 )
 ```
 
@@ -134,8 +139,8 @@ Some meters do not support the 15-minute (`amiEnergyUsages15Min`) GraphQL operat
 ```python
 from datetime import date, timedelta
 
-date_to   = date.today()
-date_from = date_to - timedelta(days=90)   # > 60 days → auto-chunked into 60-day windows
+date_to = date.today()
+date_from = date_to - timedelta(days=90)  # > 60 days → auto-chunked into 60-day windows
 
 usages = await client.get_ami_energy_usages_15min(
     meter_number=meter["meterNumber"],
@@ -144,25 +149,25 @@ usages = await client.get_ami_energy_usages_15min(
     meter_point_number=meter["meterPointNumber"],
     date_from=date_from,
     date_to=date_to,
-    fuel_type=meter.get("fuelType"),   # "ELECTRIC" or "GAS"; controls chunk size
+    fuel_type=meter.get("fuelType"),  # "ELECTRIC" or "GAS"; controls chunk size
 )
 # usages may cover less than the full range if older data is beyond the ~45-day window
 ```
 
 ## Near-Real-Time Energy Usage
 
-`get_nrt_energy_usages()` targets the `nrtEnergyUsages` endpoint — the same one the National Grid web portal uses to render its "Real-Time Usage" view. It returns interval usage from `start_datetime` through the present. Use it to fill in the current day, which the AMI endpoints (`get_ami_energy_usages()`) typically lag a day behind. Possible replacement for `get_ami_energy_usages_15min()`
+`get_interval_reads()` targets the `nrtEnergyUsages` endpoint — the same one the National Grid web portal uses to render its "Real-Time Usage" view. It returns interval usage from `start_datetime` through the present, as a list of `IntervalRead` records (`startTime`/`endTime`/`value`). Use it to fill in the current day, which the AMI endpoints (`get_ami_energy_usages()`) typically lag a day behind.
 
 ```python
 from datetime import datetime, timedelta
 
-usages = await client.get_nrt_energy_usages(
+reads = await client.get_interval_reads(
     premise_number=billing_account["premiseNumber"],
     service_point_number=meter["servicePointNumber"],
     start_datetime=datetime.now() - timedelta(hours=24),
 )
-for usage in usages:
-    print(usage["date"], usage["timeFrom"], "-", usage["timeTo"], usage["quantity"])
+for read in reads:
+    print(read["startTime"], "-", read["endTime"], read["value"])
 ```
 
 ## Premise Lookup
