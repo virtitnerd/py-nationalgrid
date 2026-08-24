@@ -94,6 +94,23 @@ async def test_get_interval_reads_returns_typed_list(
 
 
 @pytest.mark.asyncio
+async def test_get_interval_reads_returns_empty_on_no_nrt_data(
+    mock_session: MagicMock, config: NationalGridConfig
+) -> None:
+    """nrtEnergyUsages returns {"nodes": []} for meters with no NRT data (e.g. GAS)."""
+    mock_session.post.return_value = _DummyResponse({"data": {"nrtEnergyUsages": {"nodes": []}}})
+
+    client = NationalGridClient(config=config, session=mock_session)
+    reads = await client.get_interval_reads(
+        premise_number="12345",
+        service_point_number="67890",
+        start_datetime="2024-03-01 00:00:00",
+    )
+
+    assert reads == []
+
+
+@pytest.mark.asyncio
 async def test_get_interval_reads_accepts_datetime_object(
     mock_session: MagicMock, config: NationalGridConfig
 ) -> None:
@@ -132,9 +149,10 @@ async def test_get_interval_reads_uses_energy_usage_endpoint(
 
 
 @pytest.mark.asyncio
-async def test_get_interval_reads_raises_on_graphql_errors(
-    mock_session: MagicMock, config: NationalGridConfig
+async def test_get_interval_reads_returns_empty_on_graphql_errors(
+    mock_session: MagicMock, config: NationalGridConfig, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """GraphQL-level errors (e.g. non-AMI meters) are swallowed to [] with a logged warning."""
     mock_session.post.return_value = _DummyResponse(
         {
             "data": None,
@@ -144,12 +162,15 @@ async def test_get_interval_reads_raises_on_graphql_errors(
 
     client = NationalGridClient(config=config, session=mock_session)
 
-    with pytest.raises(ValueError, match="GraphQL errors encountered"):
-        await client.get_interval_reads(
+    with caplog.at_level("WARNING"):
+        reads = await client.get_interval_reads(
             premise_number="12345",
             service_point_number="67890",
             start_datetime="2024-03-01 00:00:00",
         )
+
+    assert reads == []
+    assert "Failed to extract interval reads from response" in caplog.text
 
 
 @pytest.mark.asyncio

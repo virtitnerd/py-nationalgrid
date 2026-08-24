@@ -308,10 +308,18 @@ def extract_interval_reads(response: GraphQLResponse) -> list[IntervalRead]:
 
     interval_reads: list[IntervalRead] = []
     for node in nodes:
-        end = datetime.fromisoformat(node["date"])
-        start = datetime.combine(
-            end.date(), dt_time.fromisoformat(node["timeFrom"]), tzinfo=end.tzinfo
-        )
+        try:
+            end = datetime.fromisoformat(node["date"])
+            start = datetime.combine(
+                end.date(), dt_time.fromisoformat(node["timeFrom"]), tzinfo=end.tzinfo
+            )
+            quantity = node["quantity"]
+        except (KeyError, ValueError) as exc:
+            raise DataExtractionError(
+                f"Malformed nrtEnergyUsage node: {exc}",
+                path="data.nrtEnergyUsages.nodes[]",
+                response_data=node,
+            ) from exc
         if start > end:
             # Interval crosses midnight: timeFrom belongs to the day before `date`.
             start -= timedelta(days=1)
@@ -319,7 +327,7 @@ def extract_interval_reads(response: GraphQLResponse) -> list[IntervalRead]:
             IntervalRead(
                 startTime=start.isoformat(),
                 endTime=end.isoformat(),
-                value=node["quantity"],
+                value=quantity,
             )
         )
     return interval_reads

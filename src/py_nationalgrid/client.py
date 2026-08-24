@@ -1685,10 +1685,12 @@ class NationalGridClient:
 
         Returns:
             List of near-real-time energy usages
+            Empty list ([]) when the meter has no NRT data (GraphQL errors in response)
 
         Raises:
-            GraphQLError: When the GraphQL request fails
-            DataExtractionError: When the expected data path is missing
+            GraphQLError: When the GraphQL request fails at the HTTP level
+            RetryExhaustedError: When all retry attempts are exhausted
+            DataExtractionError: When the response payload is malformed
         """
         if isinstance(start_datetime, datetime):
             datetime_str = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
@@ -1703,7 +1705,15 @@ class NationalGridClient:
             },
         )
         response = await self.execute(request, headers=headers, timeout=timeout)
-        return extract_interval_reads(response)
+
+        try:
+            return extract_interval_reads(response)
+        except ValueError as exc:
+            # Meters with no NRT data (e.g. GAS) return {"nodes": []} and never hit this
+            # branch. This is a fallback for meters that instead surface "no data" as a
+            # GraphQL-level error.
+            logger.warning("Failed to extract interval reads from response: %s", exc)
+            return []
 
     async def get_premise(
         self,
