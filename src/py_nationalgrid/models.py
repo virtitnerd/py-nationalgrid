@@ -211,6 +211,35 @@ class AmiEnergyUsagesConnection(TypedDict):
     nodes: list[AmiEnergyUsage]
 
 
+class NrtEnergyUsage(TypedDict):
+    """Real-time meter interval read data (15-minute intervals).
+
+    Attributes:
+        date: ISO 8601 timestamp equal to the interval's own `timeTo`, with the calendar date
+              already rolled forward on intervals that cross midnight
+              (e.g. "2026-08-23T00:00:00.000-04:00" for a
+              timeFrom="23:45"/timeTo="00:00" interval on 2026-08-22)
+        timeFrom: Start of the interval, HH:MM
+        timeTo: End of the interval, HH:MM
+        quantity: Energy usage quantity for the interval
+    """
+
+    date: str
+    timeFrom: str
+    timeTo: str
+    quantity: float
+
+
+class NrtEnergyUsagesConnection(TypedDict):
+    """Connection type for near-real-time energy usages.
+
+    Attributes:
+        nodes: List of near-real-time energy usage records
+    """
+
+    nodes: list[NrtEnergyUsage]
+
+
 # Bills (bill-cu-uwp-gql)
 class Bill(TypedDict):
     """A billing statement.

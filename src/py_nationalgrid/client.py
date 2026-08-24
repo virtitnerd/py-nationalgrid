@@ -71,6 +71,7 @@ from .queries import (
     energy_usages_request,
     linked_billing_accounts_request,
     meter_reading_request,
+    nrt_energy_usages_request,
     paperless_billing_request,
     payment_plans_request,
     payments_request,
@@ -81,7 +82,6 @@ from .rest_queries import (
     BUSINESS_SUBSCRIPTION_KEY,
     electric_bill_history_request,
     gas_bill_history_request,
-    realtime_meter_info_request,
 )
 
 logger = logging.getLogger(__name__)
@@ -1668,7 +1668,13 @@ class NationalGridClient:
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
     ) -> list[IntervalRead]:
-        """Get real-time meter interval reads with typed response.
+        """Get near-real-time meter interval reads.
+
+        Targets ``nrtEnergyUsages`` on the energyusage-cu-uwp-gql endpoint —
+        this is what the National Grid web portal itself uses to render
+        the Real-Time Usage. This returns data from ``start_datetime`` through
+        the present, converted to the ``startTime``/``endTime``/``value``
+        of the legacy REST interval-reads endpoint to serve as a drop-in replacement.
 
         Args:
             premise_number: The premise number (auto-converts int to str)
@@ -1678,43 +1684,36 @@ class NationalGridClient:
             timeout: Request timeout in seconds
 
         Returns:
-            List of interval reads
+            List of near-real-time energy usages
+            Empty list ([]) when the meter has no NRT data (GraphQL errors in response)
 
         Raises:
-            RestAPIError: When the REST request fails
-            DataExtractionError: When the response is not in expected format
+            GraphQLError: When the GraphQL request fails at the HTTP level
+            RetryExhaustedError: When all retry attempts are exhausted
+            DataExtractionError: When the response payload is malformed
         """
-        premise_str = str(premise_number)
-        service_point_str = str(service_point_number)
-
         if isinstance(start_datetime, datetime):
             datetime_str = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
         else:
             datetime_str = start_datetime
 
-        rest_request = realtime_meter_info_request(
-            premise_number=premise_str,
-            service_point_number=service_point_str,
-            start_datetime=datetime_str,
-            headers=headers,
+        request = nrt_energy_usages_request(
+            variables={
+                "premiseNumber": str(premise_number),
+                "servicePointNumber": str(service_point_number),
+                "startDateTime": datetime_str,
+            },
         )
+        response = await self.execute(request, headers=headers, timeout=timeout)
+
         try:
-            response = await self.request_rest(
-                rest_request.method,
-                rest_request.path_or_url,
-                params=rest_request.params,
-                json=rest_request.json,
-                data=rest_request.data,
-                headers=rest_request.headers,
-                timeout=timeout,
-            )
-        except RestAPIError as e:
-            if e.status == 404:
-                # The NRT API returns 404 when a service point has no interval reads
-                # (e.g. GAS meters). Treat as empty — consistent with other get_* methods.
-                return []
-            raise
-        return extract_interval_reads(response)
+            return extract_interval_reads(response)
+        except ValueError as exc:
+            # Meters with no NRT data (e.g. GAS) return {"nodes": []} and never hit this
+            # branch. This is a fallback for meters that instead surface "no data" as a
+            # GraphQL-level error.
+            logger.warning("Failed to extract interval reads from response: %s", exc)
+            return []
 
     async def get_premise(
         self,

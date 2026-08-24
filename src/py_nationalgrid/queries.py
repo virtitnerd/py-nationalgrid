@@ -82,6 +82,14 @@ nodes {
     quantity
 }
 """
+NRT_ENERGY_USAGES_SELECTION_SET = """
+nodes {
+    date
+    timeFrom
+    timeTo
+    quantity
+}
+"""
 BILLS_SELECTION_SET = """
 nodes {
     dueDate
@@ -432,6 +440,44 @@ def ami_energy_usages_request(
     (used as the primary path by ``get_ami_energy_usages_15min()`` for both
     ELECTRIC and GAS meters, with automatic fallback to the defaults when the
     15-minute endpoint returns GraphQL errors).
+    """
+    return StandardQuery(
+        operation_name=operation_name,
+        root_field=root_field,
+        selection_set=selection_set,
+        variables=variables,
+        variable_definitions=variable_definitions,
+        field_arguments=field_arguments,
+        endpoint=ENERGY_USAGE_ENDPOINT,
+    ).to_request()
+
+
+def nrt_energy_usages_request(
+    *,
+    selection_set: str = NRT_ENERGY_USAGES_SELECTION_SET,
+    variables: Mapping[str, Any] | None = None,
+    variable_definitions: str | Sequence[str] | None = (
+        "$premiseNumber: String",
+        "$servicePointNumber: String",
+        "$startDateTime: String",
+    ),
+    field_arguments: str | None = (
+        "premiseNumber: $premiseNumber, "
+        "servicePointNumber: $servicePointNumber, "
+        "startDateTime: $startDateTime"
+    ),
+    operation_name: str = "NrtEnergyUsages",
+    root_field: str = "nrtEnergyUsages",
+) -> GraphQLRequest:
+    """Build a near-real-time (NRT) energy usages query.
+
+    This request targets the energyusage-cu-uwp-gql GraphQL endpoint.
+
+    This seems to be a replacement for the ``amiEnergyUsages15Min`` which covers the current
+    day — the AMI endpoints typically lag a day behind.
+    ``nrtEnergyUsages`` returns near-real-time usage from
+    ``startDateTime`` through the present — this is what the National Grid
+    web portal itself uses to render the current day's usage
     """
     return StandardQuery(
         operation_name=operation_name,

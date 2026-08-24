@@ -24,8 +24,8 @@ from py_nationalgrid.extractors import (
     extract_collection_arrangements,
     extract_electric_bill_history,
     extract_gas_bill_history,
-    extract_interval_reads,
     extract_meter_reading,
+    extract_nrt_energy_usages,
     extract_paperless_billing,
     extract_payment_plans,
     extract_payments,
@@ -199,10 +199,16 @@ def test_extract_payments_nodes_none() -> None:
         extract_payments(response)
 
 
-def test_extract_interval_reads_data_none() -> None:
-    response = RestResponse(status=200, headers={}, data=None)
+def test_extract_nrt_energy_usages_data_none() -> None:
+    response = GraphQLResponse(data=None)
     with pytest.raises(DataExtractionError, match="data is null"):
-        extract_interval_reads(response)
+        extract_nrt_energy_usages(response)
+
+
+def test_extract_nrt_energy_usages_nodes_none() -> None:
+    response = GraphQLResponse(data={"nrtEnergyUsages": {}})
+    with pytest.raises(DataExtractionError, match="nodes"):
+        extract_nrt_energy_usages(response)
 
 
 def test_extract_account_dashboard_data_none() -> None:
