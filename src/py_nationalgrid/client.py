@@ -134,6 +134,35 @@ def _is_gateway_timeout(exc: Exception) -> bool:
     return False
 
 
+def _warn_ami_chunk_timeout(scope: str, w_from: date, w_to: date, collected: int) -> None:
+    """Explain a gateway timeout on one AMI chunk.
+
+    A chunk that starts before the accessible window times out because the server
+    holds no data for it. A chunk inside the window times out because the server
+    was slow, so its data is only missing from this result.
+    """
+    if (date.today() - w_from).days > AMI_CHUNK_FALLBACK_DAYS:
+        logger.warning(
+            "amiEnergyUsages15Min: request failed on %s (%s to %s) — data is likely "
+            "beyond the ~%d-day accessible window. Returning %d record(s) collected so far.",
+            scope,
+            w_from,
+            w_to,
+            AMI_CHUNK_FALLBACK_DAYS,
+            collected,
+        )
+        return
+    logger.warning(
+        "amiEnergyUsages15Min: gateway timeout on %s (%s to %s), inside the ~%d-day "
+        "accessible window. Returning %d record(s) collected so far, without this range.",
+        scope,
+        w_from,
+        w_to,
+        AMI_CHUNK_FALLBACK_DAYS,
+        collected,
+    )
+
+
 class NationalGridClient:
     """High-level client that reuses an aiohttp session."""
 
@@ -1549,14 +1578,10 @@ class NationalGridClient:
                                 )
                             except (RetryExhaustedError, GraphQLError) as sub_e:
                                 if _is_gateway_timeout(sub_e):
-                                    logger.warning(
-                                        "amiEnergyUsages15Min: request failed on "
-                                        "sub-chunk (%s to %s) — data is likely "
-                                        "beyond the ~%d-day accessible window. "
-                                        "Returning %d record(s) collected so far.",
+                                    _warn_ami_chunk_timeout(
+                                        "sub-chunk",
                                         sw_from,
                                         sw_to,
-                                        AMI_CHUNK_FALLBACK_DAYS,
                                         sum(len(c) for c in chunk_results),
                                     )
                                     hit_cold = True
@@ -1570,15 +1595,10 @@ class NationalGridClient:
                         if hit_cold:
                             break
                         continue
-                    logger.warning(
-                        "amiEnergyUsages15Min: request failed on chunk %d/%d "
-                        "(%s to %s) — data is likely beyond the ~%d-day accessible "
-                        "window. Returning %d record(s) collected so far.",
-                        i + 1,
-                        len(windows),
+                    _warn_ami_chunk_timeout(
+                        f"chunk {i + 1}/{len(windows)}",
                         w_from,
                         w_to,
-                        AMI_CHUNK_FALLBACK_DAYS,
                         sum(len(c) for c in chunk_results),
                     )
                     break

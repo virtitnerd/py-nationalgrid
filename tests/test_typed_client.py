@@ -1,6 +1,7 @@
 """Tests for typed convenience methods on NationalGridClient."""
 
-from datetime import date
+import logging
+from datetime import date, timedelta
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock
 
@@ -732,6 +733,71 @@ async def test_504_on_first_chunk_returns_empty_list(
         fuel_type="ELECTRIC",
     )
     assert usages == []
+
+
+@pytest.mark.asyncio
+async def test_504_on_recent_chunk_warns_about_the_timeout(
+    mock_session: MagicMock,
+    config: NationalGridConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A 504 on a chunk inside the accessible window is reported as a timeout."""
+    err = RetryExhaustedError(
+        "Exhausted",
+        attempts=3,
+        last_error=GraphQLError("504", endpoint="x", status=504),
+    )
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=err))
+    today = date.today()
+
+    with caplog.at_level(logging.WARNING, logger="py_nationalgrid.client"):
+        usages = await client.get_ami_energy_usages_15min(
+            meter_number="M-001",
+            premise_number="PREM-001",
+            service_point_number="SP-001",
+            meter_point_number="MP-001",
+            date_from=today - timedelta(days=3),
+            date_to=today,
+            fuel_type="ELECTRIC",
+        )
+
+    assert usages == []
+    assert "gateway timeout on chunk 1/1" in caplog.text
+    assert "beyond the" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_504_on_old_chunk_warns_about_the_accessible_window(
+    mock_session: MagicMock,
+    config: NationalGridConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A 504 on a chunk older than the accessible window keeps the window hint."""
+    err = RetryExhaustedError(
+        "Exhausted",
+        attempts=3,
+        last_error=GraphQLError("504", endpoint="x", status=504),
+    )
+    client = NationalGridClient(config=config, session=mock_session)
+    monkeypatch.setattr(client, "execute", AsyncMock(side_effect=err))
+
+    with caplog.at_level(logging.WARNING, logger="py_nationalgrid.client"):
+        usages = await client.get_ami_energy_usages_15min(
+            meter_number="M-001",
+            premise_number="PREM-001",
+            service_point_number="SP-001",
+            meter_point_number="MP-001",
+            date_from=date(2024, 1, 1),
+            date_to=date(2024, 1, 5),
+            fuel_type="ELECTRIC",
+        )
+
+    assert usages == []
+    assert "request failed on chunk 1/1 (2024-01-01 to 2024-01-05)" in caplog.text
+    assert "beyond the ~45-day accessible window" in caplog.text
 
 
 @pytest.mark.asyncio
