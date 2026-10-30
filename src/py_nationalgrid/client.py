@@ -406,6 +406,10 @@ class NationalGridClient:
                     logger.debug("GraphQL error details: %s", graphql_response.errors)
                 return graphql_response
 
+            except InvalidAuthError:
+                # Rejected credentials are not a request failure. Re-raise unwrapped
+                # so callers can map them to an authentication error, and do not retry.
+                raise
             except Exception as e:
                 last_error = e
 
