@@ -7,6 +7,7 @@ import pytest
 
 from py_nationalgrid import (
     GraphQLError,
+    InvalidAuthError,
     NationalGridClient,
     NationalGridConfig,
     RestAPIError,
@@ -511,3 +512,36 @@ def test_retry_delay_calculation():
     # Large attempt should cap at max_delay
     delay_large = client._calculate_retry_delay(10, config.retry_config)
     assert delay_large <= 12.5  # max_delay + 25% jitter
+
+
+@pytest.mark.asyncio
+async def test_invalid_auth_is_not_wrapped_or_retried(monkeypatch: pytest.MonkeyPatch):
+    """Rejected credentials surface as InvalidAuthError, not GraphQLError, with no retry."""
+    config = NationalGridConfig(
+        username="test@example.com",
+        password="wrong-password",
+        retry_config=RetryConfig(max_attempts=3, initial_delay=0.01),
+    )
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.closed = False
+    session.post = MagicMock(side_effect=AssertionError("request must not be sent"))
+
+    login_count = 0
+
+    async def _rejecting_login(self, session, username, password, login_data, timeout):
+        """Simulate the login endpoint rejecting the credentials."""
+        nonlocal login_count
+        login_count += 1
+        raise InvalidAuthError("Invalid username or password")
+
+    monkeypatch.setattr("py_nationalgrid.client.NationalGridAuth.async_login", _rejecting_login)
+
+    client = NationalGridClient(config=config, session=session)
+    request = GraphQLRequest(query="query Test { value }")
+
+    with pytest.raises(InvalidAuthError, match="Invalid username or password") as exc_info:
+        await client.execute(request)
+
+    assert not isinstance(exc_info.value, GraphQLError)
+    assert login_count == 1  # Not retried
+    session.post.assert_not_called()
